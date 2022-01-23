@@ -1,4 +1,10 @@
+**/__pycache__
 .direnv
+logs
+*.db
+*.db-journal
+venv/
+
 
 
 # Created by https://www.toptal.com/developers/gitignore/api/jupyternotebooks

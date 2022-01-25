@@ -6,8 +6,6 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator, PythonVirtualenvOperator
 
-from airflow.decorators import task
-
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
@@ -30,51 +28,39 @@ default_args = {
     # 'sla_miss_callback': yet_another_function,
     # 'trigger_rule': 'all_success'
 }
-with DAG(
-    'code_analysis_hook',
-    default_args=default_args,
-    description='Example of code analysis hook before execution',
-    schedule_interval=timedelta(minutes=10),
-    start_date=datetime(2022, 1, 1),
-    catchup=False,
-    tags=['example'],
-) as dag:
 
-    @task.python()
-    def check_config(**kwargs):
-        """
-        Configuration checker
-        """
-        for key, value in kwargs["conf"].items():
-            print(key, value)
-        print("Check for configuration errors here")
+with DAG("code_analysis_hook",
+         default_args=default_args,
+         description="Example of code analysis before execution",
+         schedule_interval=timedelta(minutes=5),
+         start_date=datetime(2022, 1, 1),
+         catchup=False,
+         tags=['big-data assurance']):
 
-    @task.python()
     def printer(**kwargs):
-        context = kwargs
-
-        for key, val in context.items():
+        for key, val in kwargs.items():
             print(key, val)
 
         print("dag vars:")
-        pprint(vars(context["dag"]))
+        pprint(vars(kwargs["dag"]))
         print("conf vars:")
-        pprint(vars(context["conf"]))
+        pprint(vars(kwargs["conf"]))
         print("dag_run vars:")
-        pprint(vars(context["dag_run"]))
+        pprint(vars(kwargs["dag_run"]))
 
-    @task.virtualenv(task_id="fasf", requirements=["requests"])
     def http_request():
         import requests
         res = requests.get("https://example.com")
         return res.text
 
-    st1 = check_config()
+    t1 = PythonOperator(
+        task_id="printer",
+        python_callable=printer
+    )
 
-    security_tasks = [st1]
+    t2 = PythonVirtualenvOperator(
+        task_id="http_request",
+        requirements=["requests"],
+        python_callable=http_request)
 
-    t1 = printer()
-
-    t2 = http_request()
-
-    security_tasks >> t1 >> t2
+    t1 >> t2

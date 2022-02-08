@@ -1,8 +1,7 @@
 **/__pycache__
 .direnv
 logs
-*.db
-*.db-journal
+airflow.db*
 venv/
 
 

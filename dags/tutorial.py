@@ -1,14 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import timedelta, datetime
 from pprint import pprint
 from textwrap import dedent
 
-# The DAG object; we'll need this to instantiate a DAG
-from airflow import DAG
-# Operators; we need this to operate!
 from airflow.operators.bash import BashOperator
-# These args will get passed on to each operator
-# You can override them on a per-task basis during operator initialization
 from airflow.operators.python import PythonOperator
+from openlineage.airflow.dag import DAG
 
 default_args = {
     'owner': 'airflow',

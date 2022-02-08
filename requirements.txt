@@ -1,7 +1,9 @@
-virtualenv
 apache-airflow
 apache-airflow-providers-apache-spark
+airflow-provider-great-expectations
 
-pyspark
+openlineage-airflow
+
+pyspark~=3.2.1
 safety
 pyan3

@@ -14,11 +14,20 @@
       pythonPackages = pkgs.${python}.pkgs;
     in
     {
+
+      packages = {
+        history-server = pkgs.writeShellScriptBin "compile_script" ''
+          CLASS="org.apache.spark.deploy.history.HistoryServer"
+          SPARK_CONF_DIR=/home/bertof/.config/nixpkgs/spark_conf/ ;
+          SPARK_LOG_DIR=/var/log/spark ;
+          SPARK_HOME="${pkgs.spark}/lib/${pkgs.spark.untarDir}" ;
+          SPARK_MASTER_HOST=127.0.0.1
+          sudo -E -u spark bash -c '. $SPARK_HOME/sbin/spark-config.sh; . $SPARK_HOME/bin/load-spark-env.sh; exec $SPARK_HOME/sbin/spark-daemon.sh start org.apache.spark.deploy.history.HistoryServer 1'
+        '';
+
+      };
+
       devShell = pkgs.mkShell {
-
-
-
-
         name = "impurePythonEnv";
         venvDir = "./venv";
         buildInputs = with pkgs;[
@@ -33,10 +42,21 @@
           # Those are dependencies that we would like to use from nixpkgs, which will
           # add them to PYTHONPATH and thus make them accessible from within the venv.
           pythonPackages.virtualenv
+          pythonPackages.ipython
+
+          hadoop
+          spark
         ];
 
         JAVA_HOME = "${pkgs.jdk8}";
-        HADOOP_HOME = "${pkgs.hadoop}/lib/hadoop-3.3.1";
+        HADOOP_HOME = "${pkgs.hadoop}/lib/${pkgs.hadoop.untarDir}";
+        SPARK_HOME = "${pkgs.spark}/lib/${pkgs.spark.untarDir}";
+        OPENLINEAGE_URL = "http://localhost:5000";
+        HADOOP_CONF_DIR = "/nix/store/h6gjg7zklwzyrdsirj5vmy98qzpk9xnc-hadoop-conf/";
+        SPARK_CONF_DIR = "/home/bertof/.config/nixpkgs/spark_conf/";
+        SPARK_LOG_DIR = "/var/log/spark";
+        # SPARK_MASTER_HOST = "127.0.0.1";
+
 
         # Run this command, only after creating the virtual environment
         postVenvCreation = ''

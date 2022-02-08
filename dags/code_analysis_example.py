@@ -5,6 +5,7 @@ from textwrap import dedent
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator, PythonVirtualenvOperator
+from airflow.lineage import AUTO
 
 from airflow.decorators import task
 
@@ -15,7 +16,7 @@ default_args = {
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 1,
-    'retry_delay': timedelta(minutes=5),
+    'retry_delay': timedelta(seconds=10),
     # 'queue': 'bash_queue',
     # 'pool': 'backfill',
     # 'priority_weight': 10,
@@ -31,7 +32,7 @@ default_args = {
     # 'trigger_rule': 'all_success'
 }
 with DAG(
-    'code_analysis_hook',
+    'code_analysis_example',
     default_args=default_args,
     description='Example of code analysis hook before execution',
     schedule_interval=timedelta(minutes=10),

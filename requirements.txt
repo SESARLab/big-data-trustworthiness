@@ -7,3 +7,5 @@ openlineage-airflow
 pyspark~=3.2.1
 safety
 pyan3
+
+markupsafe==2.0.1 # workaround https://github.com/pallets/markupsafe/issues/284

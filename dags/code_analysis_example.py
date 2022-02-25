@@ -10,13 +10,13 @@ from airflow.lineage import AUTO
 from airflow.decorators import task
 
 default_args = {
-    'owner': 'airflow',
-    'depends_on_past': False,
-    'email': ['airflow@example.com'],
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(seconds=10),
+    "owner": "airflow",
+    "depends_on_past": False,
+    "email": ["airflow@example.com"],
+    "email_on_failure": False,
+    "email_on_retry": False,
+    "retries": 1,
+    "retry_delay": timedelta(seconds=10),
     # 'queue': 'bash_queue',
     # 'pool': 'backfill',
     # 'priority_weight': 10,
@@ -32,13 +32,13 @@ default_args = {
     # 'trigger_rule': 'all_success'
 }
 with DAG(
-    'code_analysis_example',
+    "code_analysis_example",
     default_args=default_args,
-    description='Example of code analysis hook before execution',
+    description="Example of code analysis hook before execution",
     schedule_interval=timedelta(minutes=10),
     start_date=datetime(2022, 1, 1),
     catchup=False,
-    tags=['example'],
+    tags=["example"],
 ) as dag:
 
     @task.python()
@@ -67,6 +67,7 @@ with DAG(
     @task.virtualenv(task_id="fasf", requirements=["requests"])
     def http_request():
         import requests
+
         res = requests.get("https://example.com")
         return res.text
 

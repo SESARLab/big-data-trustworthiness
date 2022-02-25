@@ -9,34 +9,11 @@
   outputs = { self, nixpkgs, flake-utils }: flake-utils.lib.eachDefaultSystem (system:
 
     let
-      pkgs = nixpkgs.legacyPackages.${system};
+      pkgs = import nixpkgs { inherit system; };
       python = "python39";
       pythonPackages = pkgs.${python}.pkgs;
     in
     {
-
-      packages = {
-        start-history-server = pkgs.writeShellScriptBin "compile_script" ''
-          CLASS="org.apache.spark.deploy.history.HistoryServer"
-          SPARK_CONF_DIR=/home/bertof/.config/nixpkgs/spark_conf/
-          SPARK_LOG_DIR=/var/log/spark
-          SPARK_HOME="${pkgs.spark}/lib/${pkgs.spark.untarDir}"
-          SPARK_MASTER_HOST=127.0.0.1
-          export SPARK_DIST_CLASSPATH=`hadoop classpath`
-          sudo -E $SPARK_HOME/sbin/start-history-server.sh
-        '';
-
-        stop-history-server = pkgs.writeShellScriptBin "compile_script" ''
-          CLASS="org.apache.spark.deploy.history.HistoryServer"
-          SPARK_CONF_DIR=/home/bertof/.config/nixpkgs/spark_conf/
-          SPARK_LOG_DIR=/var/log/spark
-          SPARK_HOME="${pkgs.spark}/lib/${pkgs.spark.untarDir}"
-          SPARK_MASTER_HOST=127.0.0.1
-          export SPARK_DIST_CLASSPATH=`hadoop classpath`
-          sudo -E $SPARK_HOME/sbin/stop-history-server.sh
-        '';
-      };
-
       devShell = pkgs.mkShell {
         name = "impurePythonEnv";
         venvDir = "./venv";
@@ -54,17 +31,17 @@
           pythonPackages.virtualenv
           pythonPackages.ipython
 
-#          hadoop
-#          spark
+          # hadoop
+          # spark
         ];
 
         JAVA_HOME = "${pkgs.jdk8}";
         HADOOP_HOME = "${pkgs.hadoop}/lib/${pkgs.hadoop.untarDir}";
         SPARK_HOME = "${pkgs.spark}/lib/${pkgs.spark.untarDir}";
         OPENLINEAGE_URL = "http://localhost:5000";
-        HADOOP_CONF_DIR = "/nix/store/924rlkp13ydmjzap6fwfa72r7qgj22fm-hadoop-conf/";
-        SPARK_CONF_DIR = "/home/bertof/.config/nixpkgs/spark_conf/";
-        SPARK_LOG_DIR = "/var/log/spark";
+        HADOOP_CONF_DIR = "/nix/store/a3fb4cskiji544sc4i6zcrc0zmsijid8-hadoop-conf";
+        SPARK_CONF_DIR = "/nix/store/wm7q8kqyh2pg4sqsbl3p841kapqi0hxi-spark-config";
+        # SPARK_LOG_DIR = "/var/log/spark";
         # SPARK_MASTER_HOST = "127.0.0.1";
 
 

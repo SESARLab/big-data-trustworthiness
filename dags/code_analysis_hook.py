@@ -4,20 +4,22 @@ from textwrap import dedent
 
 # The DAG object; we'll need this to instantiate a DAG
 from airflow import DAG
+
 # Operators; we need this to operate!
 from airflow.operators.bash import BashOperator
+
 # These args will get passed on to each operator
 # You can override them on a per-task basis during operator initialization
 from airflow.operators.python import PythonOperator, PythonVirtualenvOperator
 
 default_args = {
-    'owner': 'airflow',
-    'depends_on_past': False,
-    'email': ['airflow@example.com'],
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
+    "owner": "airflow",
+    "depends_on_past": False,
+    "email": ["airflow@example.com"],
+    "email_on_failure": False,
+    "email_on_retry": False,
+    "retries": 1,
+    "retry_delay": timedelta(minutes=5),
     # 'queue': 'bash_queue',
     # 'pool': 'backfill',
     # 'priority_weight': 10,
@@ -33,24 +35,24 @@ default_args = {
     # 'trigger_rule': 'all_success'
 }
 with DAG(
-    'code_analysis_hook',
+    "code_analysis_hook",
     default_args=default_args,
-    description='Example of code analysis hook before execution',
+    description="Example of code analysis hook before execution",
     schedule_interval=timedelta(days=1),
     start_date=datetime(2021, 1, 1),
     catchup=False,
-    tags=['example'],
+    tags=["example"],
 ) as dag:
     # t1, t2 and t3 are examples of tasks created by instantiating operators
     t1 = BashOperator(
-        task_id='print_date',
-        bash_command='date',
+        task_id="print_date",
+        bash_command="date",
     )
 
     t2 = BashOperator(
-        task_id='sleep',
+        task_id="sleep",
         depends_on_past=False,
-        bash_command='sleep 5',
+        bash_command="sleep 5",
         retries=3,
     )
     t1.doc_md = dedent(
@@ -64,7 +66,9 @@ with DAG(
     """
     )
 
-    dag.doc_md = __doc__  # providing that you have a docstring at the beginning of the DAG
+    dag.doc_md = (
+        __doc__  # providing that you have a docstring at the beginning of the DAG
+    )
     dag.doc_md = """
     This is a documentation placed anywhere
     """  # otherwise, type it like this
@@ -79,9 +83,9 @@ with DAG(
     )
 
     t3 = BashOperator(
-        task_id='templated',
+        task_id="templated",
         bash_command=templated_command,
-        params={'my_param': 'Parameter I passed in'},
+        params={"my_param": "Parameter I passed in"},
     )
 
     def printer(**kwargs):
@@ -108,19 +112,16 @@ with DAG(
         #         print(task.template_fields)
         #         print(task.template_fields_renderers)
 
-    t4 = PythonOperator(
-        task_id="printer",
-        python_callable=printer
-    )
+    t4 = PythonOperator(task_id="printer", python_callable=printer)
 
     def http_request():
         import requests
+
         res = requests.get("https://example.com")
         return res.text
 
     t5 = PythonVirtualenvOperator(
-        task_id="http_request",
-        requirements=["requests"],
-        python_callable=http_request)
+        task_id="http_request", requirements=["requests"], python_callable=http_request
+    )
 
     t1 >> [t2, t3] >> t4 >> t5

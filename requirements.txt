@@ -1,11 +1,11 @@
-apache-airflow
-apache-airflow-providers-apache-spark
-airflow-provider-great-expectations
+apache-airflow==2.2.4
+apache-airflow-providers-apache-spark==2.1.0
 
-openlineage-airflow
+openlineage-airflow==0.5.2
 
-pyspark~=3.2.1
-safety
-pyan3
+pyspark==3.2.1
+safety==1.10.3
+pylint
+numpy
 
 markupsafe==2.0.1 # workaround https://github.com/pallets/markupsafe/issues/284

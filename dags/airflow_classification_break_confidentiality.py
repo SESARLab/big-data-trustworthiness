@@ -3,7 +3,7 @@ from airflow.lineage.entities import File
 from airflow.operators.python import PythonOperator
 from datetime import timedelta, datetime
 from openlineage.airflow.dag import DAG
-from typing import List
+from typing import List, Set
 
 default_args = {
     "owner": "airflow",
@@ -86,6 +86,21 @@ def python_task_source_extractor(
     }
 
 
+def file_path_heuristic(source_code: str):
+    import re
+    import itertools
+
+    iterator = itertools.chain(
+        re.finditer(
+            r'["\']\s*(\w+:(\/?\/?)[^\s]+)\s*["\']', source_code
+        ),  # well formatted uri
+        re.finditer(r'["\']\s*(.+/.+)\s*["\']', source_code),  # path
+    )
+
+    print(source_code)
+    return list(set(s.group(1).strip() for s in iterator))
+
+
 """
 Probes and analysis
 """
@@ -106,8 +121,7 @@ def requirements_analysis(requirements: List[str]):
         temp_f.flush()
 
         data = (
-            subprocess.check_output(
-                ["safety", "check", "--json", "-r", temp_f.name])
+            subprocess.check_output(["safety", "check", "--json", "-r", temp_f.name])
             .decode()
             .strip()
         )
@@ -161,24 +175,25 @@ def spark_log_probe(
     print("Using", base_path)
 
     evidence = dict()
-    evidence["allexecutors"] = requests.get(
-        "%s/allexecutors" % (base_path)).json()
+    evidence["allexecutors"] = requests.get("%s/allexecutors" % (base_path)).json()
     evidence["jobs"] = requests.get("%s/jobs" % (base_path)).json()
-    evidence["environment"] = requests.get(
-        "%s/environment" % (base_path)).json()
+    evidence["environment"] = requests.get("%s/environment" % (base_path)).json()
 
     return evidence
 
 
-def spark_log_analysis(evidence):
-    from pprint import pprint
-
+def spark_log_analysis(evidence, expected_jobs: Set[str] = set(), prev_evidence=None):
     warnings = []
-    for k, v in evidence:
-        print(k)
-        pprint(v)
+    new_jobs = {job["name"].split(".scala")[0] for job in evidence["jobs"]}
+    for job in new_jobs:
+        if job not in expected_jobs:
+            warnings.append("Unexpected job %s" % job)
 
-        # TODO
+    if prev_evidence is not None:
+        old_jobs = {job["name"].split(".scala")[0] for job in prev_evidence["jobs"]}
+        for job in new_jobs:
+            if job not in old_jobs:
+                warnings.append("New job %s not present in previous logs" % job)
 
     return {"evidence": evidence, "warnings": warnings}
 
@@ -214,8 +229,7 @@ def hdfs_config_analysis(config):
         if k == "dfs.permissions.enabled" and v == "false":
             warnings.append("FS access control is disabled")
         if k == "dfs.permissions.superusergroup" and v == "supergroup":
-            warnings.append(
-                "Task is running with default unrestricted permissions")
+            warnings.append("Task is running with default unrestricted permissions")
         if k == "hadoop.registry.secure" and v == "false":
             warnings.append("Registry security is not enabled")
         if k == "hadoop.security.authorization" and v == "false":
@@ -283,9 +297,7 @@ def pre_execution_spark_check(
     context = get_current_context()
     ti: TaskInstance = context["ti"]
 
-    res = python_task_source_extractor(
-        dag=context["dag"], task_id=target_task_id
-    )
+    res = python_task_source_extractor(dag=context["dag"], task_id=target_task_id)
 
     print(res["source"])
     print(res["args"])
@@ -299,7 +311,9 @@ def pre_execution_spark_check(
     # print("Vars operator:\n", pformat(vars(target_ti)))
 
 
-def post_execution_spark_check(spark_history_api="http://localhost:18080/api/v1"):
+def post_execution_spark_check(
+    spark_history_api="http://localhost:18080/api/v1", expected_jobs: Set[str] = set()
+):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
     from pprint import pprint
@@ -308,15 +322,25 @@ def post_execution_spark_check(spark_history_api="http://localhost:18080/api/v1"
 
     model_data = ti.xcom_pull("train_model_task")
     app_id = model_data["app_id"]
-    evidence = spark_log_probe(
-        app_id=app_id, spark_history_api=spark_history_api)
+    evidence = spark_log_probe(app_id=app_id, spark_history_api=spark_history_api)
 
-    print(evidence)
-    for k, v in evidence.items():
-        print(k)
-        pprint(v)
+    try:
+        prev_app_id = get_current_context()["previous_ti_success"].xcom_pull(
+            "train_model_task", "model_data"
+        )["app_id"]
+        prev_evidence = spark_log_probe(
+            app_id=prev_app_id, spark_history_api=spark_history_api
+        )
+    except KeyError:
+        prev_evidence = None
 
-    warnings = []
+    res = spark_log_analysis(
+        evidence=evidence, expected_jobs=expected_jobs, prev_evidence=prev_evidence
+    )
+
+    evidence = res["evidence"]
+    warnings = res["warnings"]
+
     ti.xcom_push("evidence", evidence)
     ti.xcom_push("warnings", warnings)
 
@@ -368,7 +392,21 @@ with DAG(
     post_exec_spark_check = PythonOperator(
         task_id="post_exec_spark_check",
         python_callable=post_execution_spark_check,
-        op_kwargs={"target_task_id": train_model_t._operator.task_id},
+        op_kwargs={
+            "target_task_id": train_model_t._operator.task_id,
+            "expected_jobs": {
+                "collect at AreaUnderCurve",
+                "collect at BinaryClassificationMetrics",
+                "collect at StringIndexer",
+                "count at BinaryClassificationMetrics",
+                "parquet at LinearSVC",
+                "parquet at StringIndexer",
+                "runJob at SparkHadoopWriter",
+                "showString at NativeMethodAccessorImpl.java:0",
+                "treeAggregate at RDDLossFunction",
+                "treeAggregate at Summarizer",
+            },
+        },
     )
 
     (
@@ -383,32 +421,7 @@ with DAG(
         >> [post_exec_spark_check]
     )
 
-    # pre_execution_airflow_code_check_t = PythonOperator(
-    #     task_id="pre_execution_airflow_code_check",
-    #     python_callable=python_code_analysis,
-    #     op_kwargs={"file_path": "dags/airflow_classification_break_confidentiality.py"},
-    # )
-    # pre_execution_spark_code_check_t = PythonOperator(
-    #     task_id="pre_execution_spark_code_check",
-    #     python_callable=python_code_analysis,
-    #     op_kwargs={"file_path": "dags/spark_classification.py"},
-    # )
-    # pre_execution_requirements_t = pre_execution_requirements_check()
-    # pre_execution_hadoop_t = pre_execution_hadoop_check()
-    # pre_execution_spark_t = pre_execution_spark_check(
-    #     target_task_id=train_model_t._operator.task_id
-    # )
-
-    # post_execution_spark_t = post_execution_spark_check()
-
-    # (
-    #     [
-    #         pre_execution_airflow_code_check_t,
-    #         pre_execution_spark_code_check_t,
-    #         pre_execution_requirements_t,
-    #         pre_execution_hadoop_t,
-    #         pre_execution_spark_t,
-    #     ]
-    #     >> train_model_t
-    #     >> [post_execution_spark_t]
-    # )
+    # with open("dags/spark_example.py") as f:
+    #     source = f.read()
+    # print(file_path_heuristic(source_code=source))
+    # exit(0)

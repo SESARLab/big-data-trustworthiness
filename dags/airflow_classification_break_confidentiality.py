@@ -1,9 +1,8 @@
-from airflow.decorators import task
 from airflow.lineage.entities import File
 from airflow.operators.python import PythonOperator
 from datetime import timedelta, datetime
 from openlineage.airflow.dag import DAG
-from typing import List, Set
+from typing import List, Set, Optional
 
 default_args = {
     "owner": "airflow",
@@ -29,22 +28,22 @@ default_args = {
 }
 
 """
-Pipeline di esempio
+Example pipeline
 
 Task that trains a regression model over a certain training set and saves it to HDFS
 """
 
 
-@task.python()
 def train_model_task(
     train_set,
     model_target,
     app_name="spark_classification",
 ):
-    # from spark_classification import train_model
-    # from pyspark.sql import SparkSession
-    # spark = SparkSession.builder.appName(app_name).master("yarn").getOrCreate()
-    # train_set = spark.read.csv(train_set.url, header=True, inferSchema=True)
+    from spark_classification import train_model
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.appName(app_name).master("yarn").getOrCreate()
+    train_set = spark.read.csv(train_set.url, header=True, inferSchema=True)
     # model = train_model(train_set=train_set)
     # model.write().overwrite().save(model_target)
     # res = {
@@ -86,21 +85,6 @@ def python_task_source_extractor(
     }
 
 
-def file_path_heuristic(source_code: str):
-    import re
-    import itertools
-
-    iterator = itertools.chain(
-        re.finditer(
-            r'["\']\s*(\w+:(\/?\/?)[^\s]+)\s*["\']', source_code
-        ),  # well formatted uri
-        re.finditer(r'["\']\s*(.+/.+)\s*["\']', source_code),  # path
-    )
-
-    print(source_code)
-    return list(set(s.group(1).strip() for s in iterator))
-
-
 """
 Probes and analysis
 """
@@ -110,12 +94,10 @@ def requirements_analysis(requirements: List[str]):
     """
     Given a list of requirements, returns a list of known vulnerabilities
     """
-    from pprint import pprint
     from tempfile import NamedTemporaryFile
     import json
     import subprocess
 
-    print("Checking requirements")
     with NamedTemporaryFile(mode="w") as temp_f:
         temp_f.writelines(requirements)
         temp_f.flush()
@@ -128,9 +110,6 @@ def requirements_analysis(requirements: List[str]):
 
         res = json.loads(data)
 
-        print("Warnings:")
-        pprint(res)
-
         return {"evidence": requirements, "warnings": res}
 
 
@@ -142,7 +121,6 @@ def python_code_analysis(source: List[str]):
     import json
     import subprocess
 
-    print("Checking source")
     with NamedTemporaryFile("w") as temp_f:
         temp_f.writelines(source)
         temp_f.flush()
@@ -156,7 +134,6 @@ def python_code_analysis(source: List[str]):
             .stdout.decode()
             .strip()
         )
-        print(type(data), data)
         res = json.loads(data)
 
         return {"evidence": source, "warnings": res}
@@ -171,15 +148,13 @@ def spark_log_probe(
     """
     import requests
 
-    base_path = "%s/applications/%s" % (spark_history_api, app_id)
-    print("Using", base_path)
+    base_path = f"{spark_history_api}/applications/{app_id}"
 
-    evidence = dict()
-    evidence["allexecutors"] = requests.get("%s/allexecutors" % (base_path)).json()
-    evidence["jobs"] = requests.get("%s/jobs" % (base_path)).json()
-    evidence["environment"] = requests.get("%s/environment" % (base_path)).json()
-
-    return evidence
+    return {
+        "allexecutors": requests.get(f"{base_path}/allexecutors").json(),
+        "jobs": requests.get(f"{base_path}/jobs").json(),
+        "environment": requests.get(f"{base_path}/environment").json(),
+    }
 
 
 def spark_log_analysis(evidence, expected_jobs: Set[str] = set(), prev_evidence=None):
@@ -187,13 +162,13 @@ def spark_log_analysis(evidence, expected_jobs: Set[str] = set(), prev_evidence=
     new_jobs = {job["name"].split(".scala")[0] for job in evidence["jobs"]}
     for job in new_jobs:
         if job not in expected_jobs:
-            warnings.append("Unexpected job %s" % job)
+            warnings.append(f"Unexpected job {job}")
 
     if prev_evidence is not None:
         old_jobs = {job["name"].split(".scala")[0] for job in prev_evidence["jobs"]}
         for job in new_jobs:
             if job not in old_jobs:
-                warnings.append("New job %s not present in previous logs" % job)
+                warnings.append(f"New job {job} not present in previous logs")
 
     return {"evidence": evidence, "warnings": warnings}
 
@@ -205,7 +180,7 @@ def hdfs_config_probe(hdfs_api: str = "http://localhost:9870"):
     import requests
     from xml.etree import ElementTree
 
-    content = requests.get("%s/conf" % hdfs_api).content
+    content = requests.get(f"{hdfs_api}/conf").content
     root_xml = ElementTree.fromstring(content)
 
     return {
@@ -219,7 +194,6 @@ def hdfs_config_analysis(config):
     """
     warnings = []
     for k, v in config.items():
-        print(k, v)
         # Encryption
         if k == "dfs.encrypt.data.transfer" and v == "false":
             warnings.append("In-transit data encryption is disabled")
@@ -236,6 +210,46 @@ def hdfs_config_analysis(config):
             warnings.append("Authentication is disabled")
 
     return {"evidence": config, "warnings": warnings}
+
+
+def hdfs_paths_probe(source_code: str) -> List[str]:
+    assert isinstance(source_code, str)
+
+    def file_path_heuristic(h_source_code: str) -> List[str]:
+        from itertools import chain
+        import re
+
+        r1 = r'["\']\s*(\w+:(\/?\/?)[^\s]+)\s*["\']'  # well formatted uri
+        r2 = r'["\']\s*(.+/.+)\s*["\']'  # any string with a slash
+
+        iterator = chain(re.finditer(r1, h_source_code), re.finditer(r2, h_source_code))
+
+        return list(set(s.group(1).strip() for s in iterator))
+
+    def url_map(maybe_path: str) -> Optional[str]:
+        from urllib.parse import urlparse
+
+        try:
+            parsed_url = urlparse(maybe_path)
+            if parsed_url.scheme is None:
+                parsed_url.scheme = "hdfs"
+            if parsed_url.netloc is None:
+                parsed_url.netloc = "localhost"
+
+            return parsed_url.geturl()
+
+        except ValueError:
+            return None
+
+    return list(
+        filter(
+            lambda p: p is not None,
+            map(
+                url_map,
+                file_path_heuristic(h_source_code=source_code),
+            ),
+        )
+    )
 
 
 """
@@ -287,28 +301,52 @@ def hadoop_config_check():
     ti.xcom_push("warnings", res["warnings"])
 
 
-def pre_execution_spark_check(
+def hdfs_paths_check(
     target_task_id: str,
+    spark_file_path: str,
+    expected_paths_re: List[str] = [],
 ):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
-    from pprint import pprint
+    import re
 
     context = get_current_context()
     ti: TaskInstance = context["ti"]
 
-    res = python_task_source_extractor(dag=context["dag"], task_id=target_task_id)
+    airflow_task = python_task_source_extractor(
+        dag=context["dag"], task_id=target_task_id
+    )
 
-    print(res["source"])
-    print(res["args"])
-    pprint(res["kwargs"])
+    airflow_source = (
+        [airflow_task["source"]]
+        + list(map(str, airflow_task["args"]))
+        + list(map(str, airflow_task["kwargs"].values()))
+    )
 
-    # dag_run: DagRun = ti.dag_run
-    # target_ti: TaskInstance = dag_run.get_task_instance(task_id=target_task_id)
+    with open(spark_file_path) as r:
+        spark_source = [r.read()]
 
-    # print("Executor config:\n", pformat(target_ti.executor_config))
-    # print("Type of operator:", type(target_ti))
-    # print("Vars operator:\n", pformat(vars(target_ti)))
+    source_code = airflow_source + spark_source
+
+    detected_paths = list(
+        set(path for src in source_code for path in hdfs_paths_probe(source_code=src))
+    )
+
+    evidence = {
+        "spark_source": spark_source,
+        "airflow_source": airflow_source,
+        "detected_paths": detected_paths,
+    }
+    warnings = list(
+        set(
+            f"Unexpected path {path}"
+            for path in detected_paths
+            if len({m for r in expected_paths_re for m in re.findall(r, path)}) == 0
+        )
+    )
+
+    ti.xcom_push("evidence", evidence)
+    ti.xcom_push("warnings", warnings)
 
 
 def post_execution_spark_check(
@@ -316,7 +354,6 @@ def post_execution_spark_check(
 ):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
-    from pprint import pprint
 
     ti: TaskInstance = get_current_context()["ti"]
 
@@ -358,15 +395,22 @@ with DAG(
 ) as dag:
     # Data from https://www.kaggle.com/c/titanic/
 
-    train_model_t = train_model_task(
-        train_set=File("hdfs://localhost:/titanic/train.csv"),
-        model_target="/tmp/spark/model_unsafe",  # Local path
-        app_name="spark_classification_break_confidentiality",
+    train_set = File("hdfs://localhost:/titanic/train.csv")
+
+    train_model_t = PythonOperator(
+        task_id="train_model_task",
+        python_callable=train_model_task,
+        op_kwargs={
+            "train_set": train_set,
+            "model_target": "/tmp/spark/model_unsafe",  # Local path
+            "app_name": "spark_classification_break_confidentiality",
+        },
     )
 
     pre_exec_requirements_check = PythonOperator(
         task_id="pre_execution_requirements_check", python_callable=requirements_check
     )
+
     pre_exec_airflow_code_check = PythonOperator(
         task_id="pre_exec_airflow_code_check",
         python_callable=python_code_check,
@@ -374,26 +418,33 @@ with DAG(
             "file_path": "./dags/airflow_classification_break_confidentiality.py"
         },
     )
+
     pre_exec_spark_code_check = PythonOperator(
         task_id="pre_exec_spark_code_check",
         python_callable=python_code_check,
         op_kwargs={"file_path": "./dags/spark_classification.py"},
     )
+
     pre_exec_hadoop_config_check = PythonOperator(
         task_id="pre_exec_airflow_config_check",
         python_callable=hadoop_config_check,
     )
 
-    pre_exec_spark_check = PythonOperator(
+    pre_exec_paths_check = PythonOperator(
         task_id="pre_exec_spark_check",
-        python_callable=pre_execution_spark_check,
-        op_kwargs={"target_task_id": train_model_t._operator.task_id},
+        python_callable=hdfs_paths_check,
+        op_kwargs={
+            "target_task_id": train_model_t.task_id,
+            "spark_file_path": "./dags/spark_classification.py",
+            "expected_paths_re": [r"hdfs://localhost.+"],
+        },
     )
+
     post_exec_spark_check = PythonOperator(
         task_id="post_exec_spark_check",
         python_callable=post_execution_spark_check,
         op_kwargs={
-            "target_task_id": train_model_t._operator.task_id,
+            "target_task_id": train_model_t.task_id,
             "expected_jobs": {
                 "collect at AreaUnderCurve",
                 "collect at BinaryClassificationMetrics",
@@ -415,13 +466,8 @@ with DAG(
             pre_exec_hadoop_config_check,
             pre_exec_requirements_check,
             pre_exec_spark_code_check,
-            pre_exec_spark_check,
+            pre_exec_paths_check,
         ]
         >> train_model_t
         >> [post_exec_spark_check]
     )
-
-    # with open("dags/spark_example.py") as f:
-    #     source = f.read()
-    # print(file_path_heuristic(source_code=source))
-    # exit(0)

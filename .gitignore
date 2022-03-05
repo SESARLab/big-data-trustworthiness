@@ -3,6 +3,7 @@
 logs
 airflow.db*
 venv/
+*.pid
 
 
 

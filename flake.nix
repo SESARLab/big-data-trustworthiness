@@ -17,7 +17,7 @@
       devShell = pkgs.mkShell {
         name = "impurePythonEnv";
         venvDir = "./venv";
-        buildInputs = with pkgs;[
+        buildInputs = with pkgs; [
           # A Python interpreter including the 'venv' module is required to bootstrap
           # the environment.
           pythonPackages.python
@@ -30,6 +30,8 @@
           # add them to PYTHONPATH and thus make them accessible from within the venv.
           pythonPackages.virtualenv
           pythonPackages.ipython
+
+          pythonPackages.numpy
 
           # hadoop
           # spark

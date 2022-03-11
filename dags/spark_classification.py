@@ -6,8 +6,8 @@ from pyspark.ml import Pipeline
 from pyspark.ml.classification import LinearSVC
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.feature import StringIndexer, VectorAssembler
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-from pyspark.sql import SparkSession
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder, CrossValidatorModel
+from pyspark.sql import SparkSession, functions, types
 
 
 def train_model(train_set):
@@ -15,6 +15,11 @@ def train_model(train_set):
 
     # Evaluator
     evaluator = BinaryClassificationEvaluator(labelCol="Survived")
+
+    # Convert cabin null to string
+    dumb_to_string = functions.udf(lambda x: str(x), types.StringType())
+    train_set = train_set.withColumn(
+        "Cabin", dumb_to_string(functions.col("Cabin")))
 
     # Drop NA
     train_set = train_set.dropna()
@@ -43,7 +48,7 @@ def train_model(train_set):
             "EmbarkedId",
         ],
         outputCol="features",
-    )
+    ).setHandleInvalid("keep")
 
     # Classifier
 
@@ -73,7 +78,8 @@ def train_model(train_set):
     # Cross validation
     # grid = ParamGridBuilder().addGrid(
     #     estimator.regParam, [0.1, 0.3, 0.7]).build()
-    grid = ParamGridBuilder().addGrid(estimator.regParam, [0.1, 0.3, 0.7]).build()
+    grid = ParamGridBuilder().addGrid(
+        estimator.regParam, [0.1, 0.3, 0.7]).build()
     cv = CrossValidator(
         estimator=pipeline,
         evaluator=evaluator,
@@ -105,16 +111,18 @@ if __name__ == "__main__":
 
     spark = (
         SparkSession.builder.appName("spark_classification")
-        .master("yarn")
+        # .master("yarn")
         .getOrCreate()
     )
 
     train_set_url = "hdfs://localhost:/titanic/train.csv"
-    # test_set_url = "hdfs://localhost:/titanic/test.csv"
+    test_set_url = "hdfs://localhost:/titanic/test.csv"
 
     train_set = spark.read.csv(train_set_url, header=True, inferSchema=True)
-    # test_set = spark.read.csv(test_set_url, header=True, inferSchema=True)
+    test_set = spark.read.csv(test_set_url, header=True, inferSchema=True)
 
     model = train_model(train_set=train_set)
-
     model.write().overwrite().save("hdfs://localhost:/titanic/model")
+
+    model2 = CrossValidatorModel.load("hdfs://localhost:/titanic/model")
+    model2.transform(test_set).show()

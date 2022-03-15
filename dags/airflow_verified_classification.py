@@ -3,6 +3,7 @@ from airflow.operators.python import PythonOperator
 from datetime import timedelta, datetime
 from openlineage.airflow.dag import DAG
 from typing import List, Set, Optional
+from airflow.models import TaskInstance
 
 default_args = {
     "owner": "airflow",
@@ -37,26 +38,41 @@ Task that trains a regression model over a certain training set and saves it to 
 def train_model_task(
     train_set,
     model_target,
+    results_target,
     app_name="spark_classification",
+    keep_last=False,
 ):
     from spark_classification import train_model
-    from pyspark.sql import SparkSession
+    from pyspark.sql import SparkSession, Row
+    from pyspark.ml.tuning import CrossValidatorModel
 
-    spark = SparkSession.builder.appName(app_name).master("yarn").getOrCreate()
-    train_set = spark.read.csv(train_set.url, header=True, inferSchema=True)
-    # model = train_model(train_set=train_set)
-    # model.write().overwrite().save(model_target)
-    # res = {
-    #     "app_id": spark.sparkContext.applicationId,
-    #     "scores": model.avgMetrics,
-    #     "summary": [str(param) for param in model.getEstimatorParamMaps()],
-    # }
+    spark = SparkSession.builder.appName(
+        app_name).master("local[*]").getOrCreate()
 
-    res = {
-        "app_id": "application_1645452963766_0161",
-        "scores": [0.7925691081650833],
-        "summary": [],
-    }
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        model = CrossValidatorModel.load(model_target)  # load saved model
+        data = spark.read.json(results_target)  # load saved results
+    else:
+        train_set = spark.read.csv(
+            train_set.url, header=True, inferSchema=True)
+        print("Training the model...")
+        model = train_model(train_set=train_set)  # train model
+        print("Saving the model...")
+        model.write().overwrite().save(model_target)  # save model
+        data = spark.createDataFrame(
+            data=[
+                Row(
+                    app_id=spark.sparkContext.applicationId,
+                    scores=model.avgMetrics,
+                    summary=[str(param)
+                             for param in model.getEstimatorParamMaps()],
+                )
+            ]
+        )  # prepare results
+        data.write.json(results_target, mode="overwrite")  # save results
+
+    res = [{k: e[k] for k in data.columns} for e in data.collect()][0]
 
     return res
 
@@ -103,7 +119,8 @@ def requirements_analysis(requirements: List[str]):
         temp_f.flush()
 
         data = (
-            subprocess.check_output(["safety", "check", "--json", "-r", temp_f.name])
+            subprocess.check_output(
+                ["safety", "check", "--json", "-r", temp_f.name])
             .decode()
             .strip()
         )
@@ -165,7 +182,8 @@ def spark_log_analysis(evidence, expected_jobs: Set[str] = set(), prev_evidence=
             warnings.append(f"Unexpected job {job}")
 
     if prev_evidence is not None:
-        old_jobs = {job["name"].split(".scala")[0] for job in prev_evidence["jobs"]}
+        old_jobs = {job["name"].split(".scala")[0]
+                    for job in prev_evidence["jobs"]}
         for job in new_jobs:
             if job not in old_jobs:
                 warnings.append(f"New job {job} not present in previous logs")
@@ -203,7 +221,8 @@ def hdfs_config_analysis(config):
         if k == "dfs.permissions.enabled" and v == "false":
             warnings.append("FS access control is disabled")
         if k == "dfs.permissions.superusergroup" and v == "supergroup":
-            warnings.append("Task is running with default unrestricted permissions")
+            warnings.append(
+                "Task is running with default unrestricted permissions")
         if k == "hadoop.registry.secure" and v == "false":
             warnings.append("Registry security is not enabled")
         if k == "hadoop.security.authorization" and v == "false":
@@ -222,7 +241,8 @@ def hdfs_paths_probe(source_code: str) -> List[str]:
         r1 = r'["\']\s*(\w+:(\/?\/?)[^\s]+)\s*["\']'  # well formatted uri
         r2 = r'["\']\s*(.+/.+)\s*["\']'  # any string with a slash
 
-        iterator = chain(re.finditer(r1, h_source_code), re.finditer(r2, h_source_code))
+        iterator = chain(re.finditer(r1, h_source_code),
+                         re.finditer(r2, h_source_code))
 
         return list(set(s.group(1).strip() for s in iterator))
 
@@ -349,25 +369,38 @@ def hdfs_paths_check(
     ti.xcom_push("warnings", warnings)
 
 
+def load_prev_results(ti: TaskInstance, prev_task: str):
+    from airflow.utils.state import State
+
+    prev_ti = ti.get_previous_ti(state=State.SUCCESS)
+    if prev_ti is None:
+        return None
+    return prev_ti.xcom_pull(prev_task)
+
+
 def post_execution_spark_check(
     spark_history_api="http://localhost:18080/api/v1", expected_jobs: Set[str] = set()
 ):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
+    from airflow.utils.state import State
 
     ti: TaskInstance = get_current_context()["ti"]
 
     model_data = ti.xcom_pull("train_model_task")
     app_id = model_data["app_id"]
-    evidence = spark_log_probe(app_id=app_id, spark_history_api=spark_history_api)
+    evidence = spark_log_probe(
+        app_id=app_id, spark_history_api=spark_history_api)
 
     try:
-        prev_app_id = get_current_context()["previous_ti_success"].xcom_pull(
-            "train_model_task", "model_data"
-        )["app_id"]
-        prev_evidence = spark_log_probe(
-            app_id=prev_app_id, spark_history_api=spark_history_api
-        )
+        prev_res = load_prev_results(ti, "train_model_task")
+        if prev_res is None:
+            prev_evidence = None
+        else:
+            prev_app_id = prev_res["app_id"]
+            prev_evidence = spark_log_probe(
+                app_id=prev_app_id, spark_history_api=spark_history_api
+            )
     except KeyError:
         prev_evidence = None
 
@@ -383,11 +416,10 @@ def post_execution_spark_check(
 
 
 with DAG(
-    "classification_break_confidentiality",
+    "verified_classification_pipeline",
     default_args=default_args,
     description="""
-    Classification model pipeline that breaks the confidentiality property
-    saving the data locally
+    Classification model pipeline
     """,
     schedule_interval=None,
     start_date=datetime(2022, 1, 1),
@@ -402,8 +434,10 @@ with DAG(
         python_callable=train_model_task,
         op_kwargs={
             "train_set": train_set,
-            "model_target": "/tmp/spark/model_unsafe",  # Local path
-            "app_name": "spark_classification_break_confidentiality",
+            "model_target": "/titanic/model",
+            "results_target": "/titanic/results",
+            "app_name": "spark_classification",
+            "keep_last": '{{"train_model_task" in dag_run.conf.get("keep_last", [])}}',
         },
     )
 
@@ -414,9 +448,7 @@ with DAG(
     pre_exec_airflow_code_check = PythonOperator(
         task_id="pre_exec_airflow_code_check",
         python_callable=python_code_check,
-        op_kwargs={
-            "file_path": "./dags/airflow_classification_break_confidentiality.py"
-        },
+        op_kwargs={"file_path": "./dags/airflow_verified_classification.py"},
     )
 
     pre_exec_spark_code_check = PythonOperator(

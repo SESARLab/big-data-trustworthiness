@@ -7,7 +7,7 @@ from pyspark.ml.classification import LinearSVC
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.feature import StringIndexer, VectorAssembler
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder, CrossValidatorModel
-from pyspark.sql import SparkSession, functions, types
+from pyspark.sql import SparkSession, functions, types, Row
 
 
 def train_model(train_set):
@@ -107,11 +107,9 @@ def train_model(train_set):
 
 if __name__ == "__main__":
 
-    print(sys.argv)
-
     spark = (
         SparkSession.builder.appName("spark_classification")
-        # .master("yarn")
+        .master("yarn")
         .getOrCreate()
     )
 
@@ -123,6 +121,19 @@ if __name__ == "__main__":
 
     model = train_model(train_set=train_set)
     model.write().overwrite().save("hdfs://localhost:/titanic/model")
+
+    data = spark.createDataFrame(
+        data=[
+            Row(
+                app_id=spark.sparkContext.applicationId,
+                scores=model.avgMetrics,
+                summary=[str(param)
+                         for param in model.getEstimatorParamMaps()],
+            )
+        ]
+    )
+
+    data.write.json("hdfs;//localhost:/titanic/results", mode="overwrite")
 
     model2 = CrossValidatorModel.load("hdfs://localhost:/titanic/model")
     model2.transform(test_set).show()

@@ -50,7 +50,7 @@ def train_model_task(train_set, model_target, app_name="spark_classification"):
 
 
 with DAG(
-    "classification_correct",
+    "classification_pipeline",
     default_args=default_args,
     description="Correct implementation of the classification model",
     schedule_interval=None,
@@ -62,7 +62,7 @@ with DAG(
     train_model_t = train_model_task(
         train_set=File("hdfs://localhost:/titanic/train.csv"),
         model_target=File("hdfs://localhost:/tmp/spark/model"),
-        app_name="spark_classification_correct",
+        app_name="spark_classification",
     )
 
     train_model_t

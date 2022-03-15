@@ -1,10 +1,11 @@
 from datetime import timedelta, datetime
 
 from airflow.lineage.entities import File
-from airflow.decorators import task
+from airflow.operators.python import PythonOperator
+
 from openlineage.airflow.dag import DAG
 
-from spark_classification import train_model
+import pipeline_lib
 
 default_args = {
     "owner": "airflow",
@@ -30,25 +31,6 @@ default_args = {
 }
 
 
-@task.python()
-def train_model_task(train_set, model_target, app_name="spark_classification"):
-    from pyspark.sql import SparkSession
-
-    spark = SparkSession.builder.appName(app_name).master("yarn").getOrCreate()
-
-    train_set = spark.read.csv(train_set.url, header=True, inferSchema=True)
-
-    model = train_model(train_set=train_set)
-
-    model.write().overwrite().save(model_target.url)
-
-    return {
-        "app_id": spark.sparkContext.applicationId,
-        "scores": model.avgMetrics,
-        "summary": [str(param) for param in model.getEstimatorParamMaps()],
-    }
-
-
 with DAG(
     "classification_pipeline",
     default_args=default_args,
@@ -58,11 +40,19 @@ with DAG(
     tags=["big-data assurance"],
 ) as dag:
     # Data from https://www.kaggle.com/c/titanic/data?select=train.csv
+    train_set = File("hdfs://localhost:/titanic/train.csv")
 
-    train_model_t = train_model_task(
-        train_set=File("hdfs://localhost:/titanic/train.csv"),
-        model_target=File("hdfs://localhost:/tmp/spark/model"),
-        app_name="spark_classification",
+    train_model_t = PythonOperator(
+        task_id="train_model_task",
+        python_callable=pipeline_lib.train_model_task,
+        op_kwargs={
+            "train_set": train_set,
+            "model_target": "/titanic/model",
+            "results_target": "/titanic/results",
+            "app_name": "spark_classification",
+            "keep_last":
+                '{{"train_model_task" in dag_run.conf.get("keep_last", [])}}',
+        },
     )
 
     train_model_t

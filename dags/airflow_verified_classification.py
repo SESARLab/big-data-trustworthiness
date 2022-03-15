@@ -4,6 +4,7 @@ from datetime import timedelta, datetime
 from openlineage.airflow.dag import DAG
 from typing import List, Set, Optional
 from airflow.models import TaskInstance
+import pipeline_lib
 
 default_args = {
     "owner": "airflow",
@@ -28,82 +29,9 @@ default_args = {
     # 'trigger_rule': 'all_success',
 }
 
-"""
-Example pipeline
-
-Task that trains a regression model over a certain training set and saves it to HDFS
-"""
-
-
-def train_model_task(
-    train_set,
-    model_target,
-    results_target,
-    app_name="spark_classification",
-    keep_last=False,
-):
-    from spark_classification import train_model
-    from pyspark.sql import SparkSession, Row
-    from pyspark.ml.tuning import CrossValidatorModel
-
-    spark = SparkSession.builder.appName(
-        app_name).master("local[*]").getOrCreate()
-
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        model = CrossValidatorModel.load(model_target)  # load saved model
-        data = spark.read.json(results_target)  # load saved results
-    else:
-        train_set = spark.read.csv(
-            train_set.url, header=True, inferSchema=True)
-        print("Training the model...")
-        model = train_model(train_set=train_set)  # train model
-        print("Saving the model...")
-        model.write().overwrite().save(model_target)  # save model
-        data = spark.createDataFrame(
-            data=[
-                Row(
-                    app_id=spark.sparkContext.applicationId,
-                    scores=model.avgMetrics,
-                    summary=[str(param)
-                             for param in model.getEstimatorParamMaps()],
-                )
-            ]
-        )  # prepare results
-        data.write.json(results_target, mode="overwrite")  # save results
-
-    res = [{k: e[k] for k in data.columns} for e in data.collect()][0]
-
-    return res
-
-
-"""
-Utilities
-"""
-
-
-def python_task_source_extractor(
-    dag: DAG,
-    task_id: str,
-):
-    import inspect
-    from textwrap import dedent
-    from airflow.operators.python import PythonOperator
-
-    p_op: PythonOperator = dag.get_task(task_id=task_id)
-    python_source = dedent(inspect.getsource(p_op.python_callable))
-    python_args = p_op.op_args
-    python_kwargs = p_op.op_kwargs
-    return {
-        "source": python_source,
-        "args": python_args,
-        "kwargs": python_kwargs,
-    }
-
-
-"""
-Probes and analysis
-"""
+#
+# Probes and analysis
+#
 
 
 def requirements_analysis(requirements: List[str]):
@@ -119,8 +47,7 @@ def requirements_analysis(requirements: List[str]):
         temp_f.flush()
 
         data = (
-            subprocess.check_output(
-                ["safety", "check", "--json", "-r", temp_f.name])
+            subprocess.check_output(["safety", "check", "--json", "-r", temp_f.name])
             .decode()
             .strip()
         )
@@ -161,7 +88,8 @@ def spark_log_probe(
     spark_history_api: str = "http://localhost:18080/api/v1",
 ):
     """
-    Extracts logs information of a spark application and returns it as a dictionary
+    Extracts logs information of a spark application and returns it as a
+    dictionary
     """
     import requests
 
@@ -182,8 +110,7 @@ def spark_log_analysis(evidence, expected_jobs: Set[str] = set(), prev_evidence=
             warnings.append(f"Unexpected job {job}")
 
     if prev_evidence is not None:
-        old_jobs = {job["name"].split(".scala")[0]
-                    for job in prev_evidence["jobs"]}
+        old_jobs = {job["name"].split(".scala")[0] for job in prev_evidence["jobs"]}
         for job in new_jobs:
             if job not in old_jobs:
                 warnings.append(f"New job {job} not present in previous logs")
@@ -193,7 +120,8 @@ def spark_log_analysis(evidence, expected_jobs: Set[str] = set(), prev_evidence=
 
 def hdfs_config_probe(hdfs_api: str = "http://localhost:9870"):
     """
-    Extracts configuration information of a Hadoop cluster and returns it as a dictionary
+    Extracts configuration information of a Hadoop cluster and returns it as a
+    dictionary
     """
     import requests
     from xml.etree import ElementTree
@@ -221,8 +149,7 @@ def hdfs_config_analysis(config):
         if k == "dfs.permissions.enabled" and v == "false":
             warnings.append("FS access control is disabled")
         if k == "dfs.permissions.superusergroup" and v == "supergroup":
-            warnings.append(
-                "Task is running with default unrestricted permissions")
+            warnings.append("Task is running with default unrestricted permissions")
         if k == "hadoop.registry.secure" and v == "false":
             warnings.append("Registry security is not enabled")
         if k == "hadoop.security.authorization" and v == "false":
@@ -241,8 +168,7 @@ def hdfs_paths_probe(source_code: str) -> List[str]:
         r1 = r'["\']\s*(\w+:(\/?\/?)[^\s]+)\s*["\']'  # well formatted uri
         r2 = r'["\']\s*(.+/.+)\s*["\']'  # any string with a slash
 
-        iterator = chain(re.finditer(r1, h_source_code),
-                         re.finditer(r2, h_source_code))
+        iterator = chain(re.finditer(r1, h_source_code), re.finditer(r2, h_source_code))
 
         return list(set(s.group(1).strip() for s in iterator))
 
@@ -272,9 +198,9 @@ def hdfs_paths_probe(source_code: str) -> List[str]:
     )
 
 
-"""
-Airflow task definitions
-"""
+#
+# Airflow task definitions
+#
 
 
 def requirements_check():
@@ -333,7 +259,7 @@ def hdfs_paths_check(
     context = get_current_context()
     ti: TaskInstance = context["ti"]
 
-    airflow_task = python_task_source_extractor(
+    airflow_task = pipeline_lib.python_task_source_extractor(
         dag=context["dag"], task_id=target_task_id
     )
 
@@ -383,14 +309,12 @@ def post_execution_spark_check(
 ):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
-    from airflow.utils.state import State
 
     ti: TaskInstance = get_current_context()["ti"]
 
     model_data = ti.xcom_pull("train_model_task")
     app_id = model_data["app_id"]
-    evidence = spark_log_probe(
-        app_id=app_id, spark_history_api=spark_history_api)
+    evidence = spark_log_probe(app_id=app_id, spark_history_api=spark_history_api)
 
     try:
         prev_res = load_prev_results(ti, "train_model_task")
@@ -426,12 +350,11 @@ with DAG(
     tags=["big-data assurance"],
 ) as dag:
     # Data from https://www.kaggle.com/c/titanic/
-
     train_set = File("hdfs://localhost:/titanic/train.csv")
 
     train_model_t = PythonOperator(
         task_id="train_model_task",
-        python_callable=train_model_task,
+        python_callable=pipeline_lib.train_model_task,
         op_kwargs={
             "train_set": train_set,
             "model_target": "/titanic/model",

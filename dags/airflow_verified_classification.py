@@ -34,27 +34,45 @@ default_args = {
 #
 
 
-def requirements_analysis(requirements: List[str]):
+def requirements_analysis(requirements: Optional[List[str]]):
     """
     Given a list of requirements, returns a list of known vulnerabilities
     """
     from tempfile import NamedTemporaryFile
     import json
     import subprocess
+    from airflow.operators.python import get_current_context
 
-    with NamedTemporaryFile(mode="w") as temp_f:
-        temp_f.writelines(requirements)
-        temp_f.flush()
+    if requirements is not None:
+        print("Evaluating requirements...")
+        with NamedTemporaryFile(mode="w") as temp_f:
+            temp_f.writelines(requirements)
+            temp_f.flush()
 
+            data = (
+                subprocess.run(
+                    ["safety", "check", "--json", "-r", temp_f.name],
+                    stdout=subprocess.PIPE,
+                    check=False,
+                )
+                .stdout.decode()
+                .strip()
+            )
+    else:
+        print("Evaluating installed libraries...")
         data = (
-            subprocess.check_output(["safety", "check", "--json", "-r", temp_f.name])
-            .decode()
+            subprocess.run(
+                ["safety", "check", "--json"],
+                stdout=subprocess.PIPE,
+                check=False,
+            )
+            .stdout.decode()
             .strip()
         )
 
-        res = json.loads(data)
+    res = json.loads(data)
 
-        return {"evidence": requirements, "warnings": res}
+    return {"evidence": requirements, "warnings": res}
 
 
 def python_code_analysis(source: List[str]):
@@ -203,42 +221,89 @@ def hdfs_paths_probe(source_code: str) -> List[str]:
 #
 
 
-def requirements_check():
+def requirements_check(keep_last=False):
     from airflow.operators.python import get_current_context
 
     ti = get_current_context()["ti"]
+
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
+        if prev_res is not None:
+            return prev_res
+        else:
+            print("No previous results found...")
 
     with open("requirements.txt") as f:
         requirements = list(f.readlines())
+
     res = requirements_analysis(requirements=requirements)
 
-    evidence = res["evidence"]
-    warnings = res["warnings"]
+    if len(res["warnings"]) == 0:  # No warnings
+        score = 1.0
+    else:
+        ids = [(e[0], e[4]) for e in res["warnings"]]
+        scores = list(map(pipeline_lib.cve_to_score, pipeline_lib.pyupio_to_cve(ids)))
 
-    ti.xcom_push("evidence", {"requirements": evidence})
-    ti.xcom_push("warnings", {"requirements": warnings})
+        if all([s is None for s in scores]):  # All warnings don't have scores
+            score = 0.5
+        else:  # Default
+            score = 1.0 - max([s / 10.0 for s in scores if s is not None])
+
+        print(score)
+
+    return {
+        "evidence": {"requirements": res["evidence"]},
+        "warnings": {"requirements": res["warnings"]},
+        "scores": {"requirements": score},
+    }
 
 
-def python_code_check(file_path: str):
+def python_code_check(file_path: str, keep_last=False):
     from airflow.operators.python import get_current_context
 
     ti = get_current_context()["ti"]
+
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
+        if prev_res is not None:
+            return prev_res
+        else:
+            print("No previous results found...")
 
     with open(file=file_path) as f:
         source_code = list(f.readlines())
     res = python_code_analysis(source=source_code)
 
-    evidence = {"code_analysis": {file_path: res["evidence"]}}
-    warnings = {"code_analysis": {file_path: res["warnings"]}}
+    if len(res["warnings"]) == 0:
+        score = 1.0
+    elif len([w for w in res["warnings"] if w["type"] in ["error", "fatal"]]) > 0:
+        score = 0.0
+    elif len([w for w in res["warnings"] if w["type"] in ["refactor", "warning"]]) > 0:
+        score = 0.75
+    else:  # Some convention warnings remaining
+        score = 0.90
 
-    ti.xcom_push("evidence", evidence)
-    ti.xcom_push("warnings", warnings)
+    return {
+        "evidence": {"code_analysis": {file_path: res["evidence"]}},
+        "warnings": {"code_analysis": {file_path: res["warnings"]}},
+        "score": {"code_analysis": {file_path: score}},
+    }
 
 
-def hadoop_config_check():
+def hadoop_config_check(keep_last=False):
     from airflow.operators.python import get_current_context
 
     ti = get_current_context()["ti"]
+
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
+        if prev_res is not None:
+            return prev_res
+        else:
+            print("No previous results found...")
 
     config = hdfs_config_probe()
     res = hdfs_config_analysis(config)
@@ -251,6 +316,7 @@ def hdfs_paths_check(
     target_task_id: str,
     spark_file_path: str,
     expected_paths_re: List[str] = [],
+    keep_last=False,
 ):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
@@ -258,6 +324,14 @@ def hdfs_paths_check(
 
     context = get_current_context()
     ti: TaskInstance = context["ti"]
+
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
+        if prev_res is not None:
+            return prev_res
+        else:
+            print("No previous results found...")
 
     airflow_task = pipeline_lib.python_task_source_extractor(
         dag=context["dag"], task_id=target_task_id
@@ -295,29 +369,30 @@ def hdfs_paths_check(
     ti.xcom_push("warnings", warnings)
 
 
-def load_prev_results(ti: TaskInstance, prev_task: str):
-    from airflow.utils.state import State
-
-    prev_ti = ti.get_previous_ti(state=State.SUCCESS)
-    if prev_ti is None:
-        return None
-    return prev_ti.xcom_pull(prev_task)
-
-
-def post_execution_spark_check(
-    spark_history_api="http://localhost:18080/api/v1", expected_jobs: Set[str] = set()
+def post_exec_spark_check(
+    spark_history_api="http://localhost:18080/api/v1",
+    expected_jobs: Set[str] = set(),
+    keep_last=False,
 ):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
 
     ti: TaskInstance = get_current_context()["ti"]
 
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
+        if prev_res is not None:
+            return prev_res
+        else:
+            print("No previous results found...")
+
     model_data = ti.xcom_pull("train_model_task")
     app_id = model_data["app_id"]
     evidence = spark_log_probe(app_id=app_id, spark_history_api=spark_history_api)
 
     try:
-        prev_res = load_prev_results(ti, "train_model_task")
+        prev_res = pipeline_lib.load_prev_results(ti, "train_model_task")
         if prev_res is None:
             prev_evidence = None
         else:
@@ -365,19 +440,29 @@ with DAG(
     )
 
     pre_exec_requirements_check = PythonOperator(
-        task_id="pre_execution_requirements_check", python_callable=requirements_check
+        task_id="pre_exec_requirements_check",
+        python_callable=requirements_check,
+        op_kwargs={
+            "keep_last": '{{"pre_exec_requirements_check" in dag_run.conf.get("keep_last", [])}}',
+        },
     )
 
     pre_exec_airflow_code_check = PythonOperator(
         task_id="pre_exec_airflow_code_check",
         python_callable=python_code_check,
-        op_kwargs={"file_path": "./dags/airflow_verified_classification.py"},
+        op_kwargs={
+            "file_path": "./dags/airflow_verified_classification.py",
+            "keep_last": '{{"pre_exec_airflow_code_check" in dag_run.conf.get("keep_last", [])}}',
+        },
     )
 
     pre_exec_spark_code_check = PythonOperator(
         task_id="pre_exec_spark_code_check",
         python_callable=python_code_check,
-        op_kwargs={"file_path": "./dags/spark_classification.py"},
+        op_kwargs={
+            "file_path": "./dags/spark_classification.py",
+            "keep_last": '{{"pre_exec_spark_code_check" in dag_run.conf.get("keep_last", [])}}',
+        },
     )
 
     pre_exec_hadoop_config_check = PythonOperator(
@@ -392,12 +477,13 @@ with DAG(
             "target_task_id": train_model_t.task_id,
             "spark_file_path": "./dags/spark_classification.py",
             "expected_paths_re": [r"hdfs://localhost.+"],
+            "keep_last": '{{"pre_exec_spark_check" in dag_run.conf.get("keep_last", [])}}',
         },
     )
 
     post_exec_spark_check = PythonOperator(
         task_id="post_exec_spark_check",
-        python_callable=post_execution_spark_check,
+        python_callable=post_exec_spark_check,
         op_kwargs={
             "target_task_id": train_model_t.task_id,
             "expected_jobs": {
@@ -412,6 +498,7 @@ with DAG(
                 "treeAggregate at RDDLossFunction",
                 "treeAggregate at Summarizer",
             },
+            "keep_last": '{{"post_exec_spark_check" in dag_run.conf.get("keep_last", [])}}',
         },
     )
 

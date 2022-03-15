@@ -1,4 +1,6 @@
+from airflow.models import TaskInstance
 from openlineage.airflow.dag import DAG
+from typing import Optional
 
 
 def train_model_task(
@@ -65,3 +67,45 @@ def python_task_source_extractor(
         "args": python_args,
         "kwargs": python_kwargs,
     }
+
+
+def load_prev_results(ti: TaskInstance, prev_task: str):
+    from airflow.utils.state import State
+
+    prev_ti = ti.get_previous_ti(state=State.SUCCESS)
+    if prev_ti is None:
+        return None
+    return prev_ti.xcom_pull(prev_task)
+
+
+def pyupio_to_cve(ids: [(str, str)]) -> [str]:
+    """
+    Converts pyupio ids to cves
+
+    `ids` is a list of (<library name>, <pyupio id>)
+    """
+    if len(ids) == 0:
+        return []
+
+    import requests
+
+    db = requests.get(
+        "https://raw.githubusercontent.com/pyupio/safety-db/master/data/insecure_full.json"
+    ).json()
+
+    return [
+        e.get("cve")
+        for lib, pid in ids
+        for e in db.get(lib, [])
+        if e["id"] == f"pyup.io-{pid}" and e.get("cve") is not None
+    ]
+
+
+def cve_to_score(cve: str) -> Optional[float]:
+    import cve_lookup
+
+    try:
+        res = cve_lookup.cve(cve)
+        return res.cvss2.score_overall
+    except (AssertionError, ValueError):
+        return None

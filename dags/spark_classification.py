@@ -1,16 +1,12 @@
-import sys
-from pprint import pformat
-
-# from airflow.decorators import task
-from pyspark.ml import Pipeline
-from pyspark.ml.classification import LinearSVC
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
-from pyspark.ml.feature import StringIndexer, VectorAssembler
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder, CrossValidatorModel
-from pyspark.sql import SparkSession, functions, types, Row
-
-
 def train_model(train_set):
+    from pprint import pformat
+    from pyspark.ml.classification import LinearSVC
+    from pyspark.ml.evaluation import BinaryClassificationEvaluator
+    from pyspark.ml.feature import StringIndexer, VectorAssembler
+    from pyspark.ml import Pipeline
+    from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+    from pyspark.sql import functions, types
+
     train_set.printSchema()
 
     # Evaluator
@@ -18,8 +14,7 @@ def train_model(train_set):
 
     # Convert cabin null to string
     dumb_to_string = functions.udf(lambda x: str(x), types.StringType())
-    train_set = train_set.withColumn(
-        "Cabin", dumb_to_string(functions.col("Cabin")))
+    train_set = train_set.withColumn("Cabin", dumb_to_string(functions.col("Cabin")))
 
     # Drop NA
     train_set = train_set.dropna()
@@ -78,8 +73,7 @@ def train_model(train_set):
     # Cross validation
     # grid = ParamGridBuilder().addGrid(
     #     estimator.regParam, [0.1, 0.3, 0.7]).build()
-    grid = ParamGridBuilder().addGrid(
-        estimator.regParam, [0.1, 0.3, 0.7]).build()
+    grid = ParamGridBuilder().addGrid(estimator.regParam, [0.1, 0.3, 0.7]).build()
     cv = CrossValidator(
         estimator=pipeline,
         evaluator=evaluator,
@@ -106,6 +100,8 @@ def train_model(train_set):
 
 
 if __name__ == "__main__":
+    from pyspark.ml.tuning import CrossValidatorModel
+    from pyspark.sql import SparkSession, Row
 
     spark = (
         SparkSession.builder.appName("spark_classification")
@@ -127,13 +123,12 @@ if __name__ == "__main__":
             Row(
                 app_id=spark.sparkContext.applicationId,
                 scores=model.avgMetrics,
-                summary=[str(param)
-                         for param in model.getEstimatorParamMaps()],
+                summary=[str(param) for param in model.getEstimatorParamMaps()],
             )
         ]
     )
 
-    data.write.json("hdfs;//localhost:/titanic/results", mode="overwrite")
+    data.write.json("hdfs://localhost:/titanic/results", mode="overwrite")
 
     model2 = CrossValidatorModel.load("hdfs://localhost:/titanic/model")
     model2.transform(test_set).show()

@@ -3,7 +3,7 @@ from openlineage.airflow.dag import DAG
 from typing import Optional
 
 
-def train_model_task(
+def train_model(
     train_set,
     model_target,
     results_target,

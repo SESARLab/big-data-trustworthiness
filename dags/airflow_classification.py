@@ -44,14 +44,13 @@ with DAG(
 
     train_model_t = PythonOperator(
         task_id="train_model_task",
-        python_callable=pipeline_lib.train_model_task,
+        python_callable=pipeline_lib.train_model,
         op_kwargs={
             "train_set": train_set,
             "model_target": "/titanic/model",
             "results_target": "/titanic/results",
             "app_name": "spark_classification",
-            "keep_last":
-                '{{"train_model_task" in dag_run.conf.get("keep_last", [])}}',
+            "keep_last": '{{"train_model_task" in dag_run.conf.get("keep_last", [])}}',
         },
     )
 

@@ -3,8 +3,8 @@ from airflow.operators.python import PythonOperator
 from datetime import timedelta, datetime
 from openlineage.airflow.dag import DAG
 from typing import List, Set, Optional
-from airflow.models import TaskInstance
 import pipeline_lib
+from airflow.utils.task_group import TaskGroup
 
 default_args = {
     "owner": "airflow",
@@ -41,7 +41,6 @@ def requirements_analysis(requirements: Optional[List[str]]):
     from tempfile import NamedTemporaryFile
     import json
     import subprocess
-    from airflow.operators.python import get_current_context
 
     if requirements is not None:
         print("Evaluating requirements...")
@@ -157,29 +156,37 @@ def hdfs_config_analysis(config):
     Analyzes an Hadoop cluster configuration
     """
     warnings = []
+    scores = []
     for k, v in config.items():
         # Encryption
         if k == "dfs.encrypt.data.transfer" and v == "false":
             warnings.append("In-transit data encryption is disabled")
+            scores.append(0.1)
         if k == "yarn.intermediate-data-encryption.enable" and v == "false":
             warnings.append("Intermediate data encryption is disabled")
+            scores.append(0.1)
         # Access control
         if k == "dfs.permissions.enabled" and v == "false":
             warnings.append("FS access control is disabled")
+            scores.append(0.1)
         if k == "dfs.permissions.superusergroup" and v == "supergroup":
             warnings.append("Task is running with default unrestricted permissions")
+            scores.append(0.5)
         if k == "hadoop.registry.secure" and v == "false":
             warnings.append("Registry security is not enabled")
+            scores.append(0.5)
         if k == "hadoop.security.authorization" and v == "false":
             warnings.append("Authentication is disabled")
+            scores.append(0.1)
 
-    return {"evidence": config, "warnings": warnings}
+    return {"evidence": config, "warnings": warnings, "scores": scores}
 
 
 def hdfs_paths_probe(source_code: str) -> List[str]:
     assert isinstance(source_code, str)
 
     def file_path_heuristic(h_source_code: str) -> List[str]:
+
         from itertools import chain
         import re
 
@@ -191,6 +198,7 @@ def hdfs_paths_probe(source_code: str) -> List[str]:
         return list(set(s.group(1).strip() for s in iterator))
 
     def url_map(maybe_path: str) -> Optional[str]:
+
         from urllib.parse import urlparse
 
         try:
@@ -253,9 +261,9 @@ def requirements_check(keep_last=False):
         print(score)
 
     return {
-        "evidence": {"requirements": res["evidence"]},
-        "warnings": {"requirements": res["warnings"]},
-        "scores": {"requirements": score},
+        "evidence": res["evidence"],
+        "warnings": res["warnings"],
+        "score": score,
     }
 
 
@@ -286,9 +294,10 @@ def python_code_check(file_path: str, keep_last=False):
         score = 0.90
 
     return {
-        "evidence": {"code_analysis": {file_path: res["evidence"]}},
-        "warnings": {"code_analysis": {file_path: res["warnings"]}},
-        "score": {"code_analysis": {file_path: score}},
+        "file_path": file_path,
+        "evidence": res["evidence"],
+        "warnings": res["warnings"],
+        "score": score,
     }
 
 
@@ -307,9 +316,13 @@ def hadoop_config_check(keep_last=False):
 
     config = hdfs_config_probe()
     res = hdfs_config_analysis(config)
+    score = min(res["scores"] + [1.0])  # min of scores or default to 1.0
 
-    ti.xcom_push("evidence", res["evidence"])
-    ti.xcom_push("warnings", res["warnings"])
+    return {
+        "evidence": res["evidence"],
+        "warnings": res["warnings"],
+        "score": score,
+    }
 
 
 def hdfs_paths_check(
@@ -364,12 +377,12 @@ def hdfs_paths_check(
             if len({m for r in expected_paths_re for m in re.findall(r, path)}) == 0
         )
     )
+    score = 1.0 if len(warnings) == 0 else 0.0
 
-    ti.xcom_push("evidence", evidence)
-    ti.xcom_push("warnings", warnings)
+    return {"evidence": evidence, "warnings": warnings, "score": score}
 
 
-def post_exec_spark_check(
+def spark_logs_check(
     spark_history_api="http://localhost:18080/api/v1",
     expected_jobs: Set[str] = set(),
     keep_last=False,
@@ -387,12 +400,12 @@ def post_exec_spark_check(
         else:
             print("No previous results found...")
 
-    model_data = ti.xcom_pull("train_model_task")
+    model_data = ti.xcom_pull("pipeline.train_model")
     app_id = model_data["app_id"]
     evidence = spark_log_probe(app_id=app_id, spark_history_api=spark_history_api)
 
     try:
-        prev_res = pipeline_lib.load_prev_results(ti, "train_model_task")
+        prev_res = pipeline_lib.load_prev_results(ti, "train_model")
         if prev_res is None:
             prev_evidence = None
         else:
@@ -407,11 +420,37 @@ def post_exec_spark_check(
         evidence=evidence, expected_jobs=expected_jobs, prev_evidence=prev_evidence
     )
 
-    evidence = res["evidence"]
-    warnings = res["warnings"]
+    score = 1.0 if len(res["warnings"]) == 0 else 0.0
 
-    ti.xcom_push("evidence", evidence)
-    ti.xcom_push("warnings", warnings)
+    return {"evidence": res["evidence"], "warnings": res["warnings"], "score": score}
+
+
+def report_generator(task_ids: Optional[Set[str]] = None):
+    from airflow.models import TaskInstance
+    from airflow.operators.python import get_current_context
+    from functools import reduce
+    import operator
+
+    ctx = get_current_context()
+    ti: TaskInstance = ctx["ti"]
+    if task_ids is None:
+        task_ids = ti.task.upstream_task_ids
+
+    prev_results = {
+        task_id: res for task_id, res in zip(task_ids, ti.xcom_pull(task_ids=task_ids))
+    }
+
+    task_scores = {task_id: res.get("score") for task_id, res in prev_results.items()}
+    task_warnings = {
+        task_id: res.get("warnings") for task_id, res in prev_results.items()
+    }
+
+    return {
+        "score": min(list(task_scores.values()) + [1.0]),
+        "prod_score": reduce(operator.mul, task_scores.values(), 1.0),
+        "task_scores": task_scores,
+        "task_warnings": task_warnings,
+    }
 
 
 with DAG(
@@ -427,89 +466,93 @@ with DAG(
     # Data from https://www.kaggle.com/c/titanic/
     train_set = File("hdfs://localhost:/titanic/train.csv")
 
-    train_model_t = PythonOperator(
-        task_id="train_model_task",
-        python_callable=pipeline_lib.train_model_task,
-        op_kwargs={
-            "train_set": train_set,
-            "model_target": "/titanic/model",
-            "results_target": "/titanic/results",
-            "app_name": "spark_classification",
-            "keep_last": '{{"train_model_task" in dag_run.conf.get("keep_last", [])}}',
-        },
-    )
-
-    pre_exec_requirements_check = PythonOperator(
-        task_id="pre_exec_requirements_check",
-        python_callable=requirements_check,
-        op_kwargs={
-            "keep_last": '{{"pre_exec_requirements_check" in dag_run.conf.get("keep_last", [])}}',
-        },
-    )
-
-    pre_exec_airflow_code_check = PythonOperator(
-        task_id="pre_exec_airflow_code_check",
-        python_callable=python_code_check,
-        op_kwargs={
-            "file_path": "./dags/airflow_verified_classification.py",
-            "keep_last": '{{"pre_exec_airflow_code_check" in dag_run.conf.get("keep_last", [])}}',
-        },
-    )
-
-    pre_exec_spark_code_check = PythonOperator(
-        task_id="pre_exec_spark_code_check",
-        python_callable=python_code_check,
-        op_kwargs={
-            "file_path": "./dags/spark_classification.py",
-            "keep_last": '{{"pre_exec_spark_code_check" in dag_run.conf.get("keep_last", [])}}',
-        },
-    )
-
-    pre_exec_hadoop_config_check = PythonOperator(
-        task_id="pre_exec_airflow_config_check",
-        python_callable=hadoop_config_check,
-    )
-
-    pre_exec_paths_check = PythonOperator(
-        task_id="pre_exec_spark_check",
-        python_callable=hdfs_paths_check,
-        op_kwargs={
-            "target_task_id": train_model_t.task_id,
-            "spark_file_path": "./dags/spark_classification.py",
-            "expected_paths_re": [r"hdfs://localhost.+"],
-            "keep_last": '{{"pre_exec_spark_check" in dag_run.conf.get("keep_last", [])}}',
-        },
-    )
-
-    post_exec_spark_check = PythonOperator(
-        task_id="post_exec_spark_check",
-        python_callable=post_exec_spark_check,
-        op_kwargs={
-            "target_task_id": train_model_t.task_id,
-            "expected_jobs": {
-                "collect at AreaUnderCurve",
-                "collect at BinaryClassificationMetrics",
-                "collect at StringIndexer",
-                "count at BinaryClassificationMetrics",
-                "parquet at LinearSVC",
-                "parquet at StringIndexer",
-                "runJob at SparkHadoopWriter",
-                "showString at NativeMethodAccessorImpl.java:0",
-                "treeAggregate at RDDLossFunction",
-                "treeAggregate at Summarizer",
+    with TaskGroup(group_id="pipeline") as p1:
+        train_model_t = PythonOperator(
+            task_id="train_model",
+            python_callable=pipeline_lib.train_model,
+            op_kwargs={
+                "train_set": train_set,
+                "model_target": "/titanic/model",
+                "results_target": "/titanic/results",
+                "app_name": "spark_classification",
+                "keep_last": '{{"train_model" in dag_run.conf.get("keep_last", [])}}',
             },
-            "keep_last": '{{"post_exec_spark_check" in dag_run.conf.get("keep_last", [])}}',
-        },
-    )
+        )
 
-    (
-        [
-            pre_exec_airflow_code_check,
-            pre_exec_hadoop_config_check,
-            pre_exec_requirements_check,
-            pre_exec_spark_code_check,
-            pre_exec_paths_check,
-        ]
-        >> train_model_t
-        >> [post_exec_spark_check]
-    )
+    with TaskGroup(group_id="pre-execution-checks") as pre_p1:
+        requirements_check_t = PythonOperator(
+            task_id="requirements_check",
+            python_callable=requirements_check,
+            op_kwargs={
+                "keep_last": '{{"requirements_check" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+        python_code_check_airflow_t = PythonOperator(
+            task_id="python_code_check_airflow",
+            python_callable=python_code_check,
+            op_kwargs={
+                "file_path": "./dags/airflow_verified_classification.py",
+                "keep_last": '{{"python_code_check_airflow" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+        python_code_check_spark_t = PythonOperator(
+            task_id="python_code_check_spark",
+            python_callable=python_code_check,
+            op_kwargs={
+                "file_path": "./dags/spark_classification.py",
+                "keep_last": '{{"python_code_check_spark" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+        hadoop_config_check_t = PythonOperator(
+            task_id="hadoop_config_check",
+            python_callable=hadoop_config_check,
+            op_kwargs={
+                "keep_last": '{{"hadoop_config_check" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+        hdfs_paths_check_t = PythonOperator(
+            task_id="hdfs_paths_check",
+            python_callable=hdfs_paths_check,
+            op_kwargs={
+                "target_task_id": train_model_t.task_id,
+                "spark_file_path": "./dags/spark_classification.py",
+                "expected_paths_re": [r"hdfs://localhost.+"],
+                "keep_last": '{{"hdfs_paths_check" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+    with TaskGroup(group_id="post-execution-checks") as post_p1:
+        spark_logs_check_t = PythonOperator(
+            task_id="spark_logs_check",
+            python_callable=spark_logs_check,
+            retry_delay=timedelta(seconds=5),
+            retries=2,
+            op_kwargs={
+                "target_task_id": train_model_t.task_id,
+                "expected_jobs": {
+                    "collect at AreaUnderCurve",
+                    "collect at BinaryClassificationMetrics",
+                    "collect at StringIndexer",
+                    "count at BinaryClassificationMetrics",
+                    "parquet at LinearSVC",
+                    "parquet at StringIndexer",
+                    "runJob at SparkHadoopWriter",
+                    "showString at NativeMethodAccessorImpl.java:0",
+                    "treeAggregate at RDDLossFunction",
+                    "treeAggregate at Summarizer",
+                },
+                "keep_last": '{{"spark_logs_check" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+    with TaskGroup(group_id="assurance-report") as ass_p1:
+        report_generator_t = PythonOperator(
+            task_id="report_generator", python_callable=report_generator
+        )
+
+    pre_p1 >> p1 >> post_p1
+    [pre_p1, post_p1] >> ass_p1

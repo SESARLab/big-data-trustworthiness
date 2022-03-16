@@ -151,33 +151,81 @@ def hdfs_config_probe(hdfs_api: str = "http://localhost:9870"):
     }
 
 
-def hdfs_config_analysis(config):
+def hdfs_config_analysis_encryption(config):
     """
     Analyzes an Hadoop cluster configuration
     """
     warnings = []
     scores = []
-    for k, v in config.items():
-        # Encryption
-        if k == "dfs.encrypt.data.transfer" and v == "false":
-            warnings.append("In-transit data encryption is disabled")
-            scores.append(0.1)
-        if k == "yarn.intermediate-data-encryption.enable" and v == "false":
-            warnings.append("Intermediate data encryption is disabled")
-            scores.append(0.1)
-        # Access control
-        if k == "dfs.permissions.enabled" and v == "false":
-            warnings.append("FS access control is disabled")
-            scores.append(0.1)
-        if k == "dfs.permissions.superusergroup" and v == "supergroup":
-            warnings.append("Task is running with default unrestricted permissions")
-            scores.append(0.5)
-        if k == "hadoop.registry.secure" and v == "false":
-            warnings.append("Registry security is not enabled")
-            scores.append(0.5)
-        if k == "hadoop.security.authorization" and v == "false":
-            warnings.append("Authentication is disabled")
-            scores.append(0.1)
+    if config.get("dfs.encrypt.data.transfer", "false") == "false":
+        warnings.append("In-transit data encryption is disabled")
+        scores.append(0.1)
+    if config.get("yarn.intermediate-data-encryption.enable", "false") == "false":
+        warnings.append("Intermediate data encryption is disabled")
+        scores.append(0.1)
+
+    return {"evidence": config, "warnings": warnings, "scores": scores}
+
+
+def hdfs_config_analysis_security(config):
+    """
+    Analyzes an Hadoop cluster configuration
+    """
+    warnings = []
+    scores = []
+    if config.get("dfs.permissions.enabled", "false") == "false":
+        warnings.append("FS access control is disabled")
+        scores.append(0.1)
+    if config.get("dfs.permissions.superusergroup", "supergroup") == "supergroup":
+        warnings.append("Task is running with default unrestricted permissions")
+        scores.append(0.5)
+    if config.get("hadoop.registry.secure", "false") == "false":
+        warnings.append("Registry security is not enabled")
+        scores.append(0.5)
+    if config.get("hadoop.security.authorization", "false") == "false":
+        warnings.append("Authentication is disabled")
+        scores.append(0.1)
+
+    return {"evidence": config, "warnings": warnings, "scores": scores}
+
+
+def spark_config_probe(master: str = "spark://localhost:7077"):
+    """
+    Extracts configuration information of a Spark cluster and returns it as a
+    dictionary
+    """
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.appName("conf-checker").master(master).getOrCreate()
+    return dict(spark.sparkContext.getConf().getAll())
+
+
+def spark_config_analysis(config):
+    warnings = []
+    scores = []
+
+    if config.get("spark.network.crypto.enabled", "false") == "false":
+        warnings.append("Network encryption is disabled")
+        scores.append(0.1)
+    if config.get("spark.io.encryption.enable", "false") == "false":
+        warnings.append("IO encryption is disabled")
+        scores.append(0.1)
+
+    return {"evidence": config, "warnings": warnings, "scores": scores}
+
+
+def airflow_config_analysis(config):
+    from pprint import pprint
+
+    warnings = []
+    scores = []
+
+    if config.get("core", {}).get("spark.network.crypto.enabled", "") == "":
+        warnings.append("Fernet key is not set")
+        scores.append(0.1)
+    if config.get("kubernetes", {}).get("verify_ssl", "False") == "False":
+        warnings.append("SSL cert. check is disabled")
+        scores.append(0.1)
 
     return {"evidence": config, "warnings": warnings, "scores": scores}
 
@@ -301,7 +349,7 @@ def python_code_check(file_path: str, keep_last=False):
     }
 
 
-def hadoop_config_check(keep_last=False):
+def hadoop_config_check_encryption(keep_last=False):
     from airflow.operators.python import get_current_context
 
     ti = get_current_context()["ti"]
@@ -315,7 +363,83 @@ def hadoop_config_check(keep_last=False):
             print("No previous results found...")
 
     config = hdfs_config_probe()
-    res = hdfs_config_analysis(config)
+    res = hdfs_config_analysis_encryption(config)
+    score = min(res["scores"] + [1.0])  # min of scores or default to 1.0
+
+    return {
+        "evidence": res["evidence"],
+        "warnings": res["warnings"],
+        "score": score,
+    }
+
+
+def hadoop_config_check_security(keep_last=False):
+    from airflow.operators.python import get_current_context
+
+    ti = get_current_context()["ti"]
+
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
+        if prev_res is not None:
+            return prev_res
+        else:
+            print("No previous results found...")
+
+    config = hdfs_config_probe()
+    res = hdfs_config_analysis_security(config)
+    score = min(res["scores"] + [1.0])  # min of scores or default to 1.0
+
+    return {
+        "evidence": res["evidence"],
+        "warnings": res["warnings"],
+        "score": score,
+    }
+
+
+def spark_config_check(master: str = "spark://localhost:7077", keep_last=False):
+    from airflow.models import TaskInstance
+    from airflow.operators.python import get_current_context
+
+    ti: TaskInstance = get_current_context()["ti"]
+
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
+        if prev_res is not None:
+            return prev_res
+        else:
+            print("No previous results found...")
+
+    config = spark_config_probe(master)
+    res = spark_config_analysis(config)
+    score = min(res["scores"] + [1.0])  # min of scores or default to 1.0
+
+    return {
+        "evidence": res["evidence"],
+        "warnings": res["warnings"],
+        "score": score,
+    }
+
+
+def airflow_config_check(keep_last=False):
+    from airflow.configuration import conf
+    from airflow.models import TaskInstance
+    from airflow.operators.python import get_current_context
+    from pprint import pprint
+
+    ti: TaskInstance = get_current_context()["ti"]
+
+    if str(keep_last).strip().lower() == "true":
+        print("Using last results...")
+        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
+        if prev_res is not None:
+            return prev_res
+        else:
+            print("No previous results found...")
+
+    config = conf.as_dict(display_sensitive=True)
+    res = airflow_config_analysis(config)
     score = min(res["scores"] + [1.0])  # min of scores or default to 1.0
 
     return {
@@ -405,7 +529,7 @@ def spark_logs_check(
     evidence = spark_log_probe(app_id=app_id, spark_history_api=spark_history_api)
 
     try:
-        prev_res = pipeline_lib.load_prev_results(ti, "train_model")
+        prev_res = pipeline_lib.load_prev_results(ti, "pipeline.train_model")
         if prev_res is None:
             prev_evidence = None
         else:
@@ -475,7 +599,7 @@ with DAG(
                 "model_target": "/titanic/model",
                 "results_target": "/titanic/results",
                 "app_name": "spark_classification",
-                "keep_last": '{{"train_model" in dag_run.conf.get("keep_last", [])}}',
+                "keep_last": '{{"pipeline.train_model" in dag_run.conf.get("keep_last", [])}}',
             },
         )
 
@@ -506,11 +630,35 @@ with DAG(
             },
         )
 
-        hadoop_config_check_t = PythonOperator(
-            task_id="hadoop_config_check",
-            python_callable=hadoop_config_check,
+        hadoop_config_check_encryption_t = PythonOperator(
+            task_id="hadoop_config_check_encryption",
+            python_callable=hadoop_config_check_encryption,
             op_kwargs={
-                "keep_last": '{{"hadoop_config_check" in dag_run.conf.get("keep_last", [])}}',
+                "keep_last": '{{"hadoop_config_check_encryption" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+        hadoop_config_check_security_t = PythonOperator(
+            task_id="hadoop_config_check_security",
+            python_callable=hadoop_config_check_security,
+            op_kwargs={
+                "keep_last": '{{"hadoop_config_check_security" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+        spark_config_check_t = PythonOperator(
+            task_id="spark_config_check",
+            python_callable=spark_config_check,
+            op_kwargs={
+                "keep_last": '{{"spark_config_check" in dag_run.conf.get("keep_last", [])}}',
+            },
+        )
+
+        airflow_config_check_t = PythonOperator(
+            task_id="airflow_config_check",
+            python_callable=airflow_config_check,
+            op_kwargs={
+                "keep_last": '{{"airflow_config_check" in dag_run.conf.get("keep_last", [])}}',
             },
         )
 

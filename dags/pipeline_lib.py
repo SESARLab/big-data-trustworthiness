@@ -74,7 +74,8 @@ def train_model(
         model = CrossValidatorModel.load(model_target)  # load saved model
         data = spark.read.json(results_target)  # load saved results
     else:
-        train_set = spark.read.csv(train_set.url, header=True, inferSchema=True)
+        train_set = spark.read.csv(
+            train_set.url, header=True, inferSchema=True)
         print("Training the model...")
         model = train_model(train_set=train_set)  # train model
         print("Saving the model...")
@@ -84,7 +85,8 @@ def train_model(
                 Row(
                     app_id=spark.sparkContext.applicationId,
                     scores=model.avgMetrics,
-                    summary=[str(param) for param in model.getEstimatorParamMaps()],
+                    summary=[str(param)
+                             for param in model.getEstimatorParamMaps()],
                 )
             ]
         )  # prepare results
@@ -114,6 +116,30 @@ def python_task_source_extractor(
         "source": python_source,
         "args": python_args,
         "kwargs": python_kwargs,
+    }
+
+
+def spark_submit_task_source_extractor(
+    dag: DAG,
+    task_id: str,
+):
+    """
+    Source code extractort for python airflow opertors
+    """
+    import inspect
+    from textwrap import dedent
+    from airflow.providers.apache.spark.operators.spark_submit import (
+        SparkSubmitOperator,
+    )
+
+    p_op: SparkSubmitOperator = dag.get_task(task_id=task_id)
+    with open(p_op._application) as f:
+        spark_source = f.read()
+    spark_args = p_op._application_args
+    spark_args = {} if spark_args is None else spark_args
+    return {
+        "source": spark_source,
+        "args": spark_args,
     }
 
 

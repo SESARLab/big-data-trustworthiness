@@ -38,12 +38,11 @@ class CachingPythonOperator(PythonOperator):
         from airflow.models import DagRun
 
         dag_run: DagRun = context["dag_run"]
-        keep_last = dag_run.conf.get("keep_last")
+        keep_last = dag_run.conf.get("keep_last", [])
 
         if self.task_id in keep_last:
             print("Using last results...")
-            prev_res = pipeline_lib.load_prev_results(
-                context["ti"], self.task_id)
+            prev_res = pipeline_lib.load_prev_results(context["ti"], self.task_id)
             if prev_res is not None:
                 return prev_res
             else:
@@ -59,12 +58,11 @@ class CachingSparkSubmitOperator(SparkSubmitOperator):
         from airflow.models import DagRun
 
         dag_run: DagRun = context["dag_run"]
-        keep_last = dag_run.conf.get("keep_last")
+        keep_last = dag_run.conf.get("keep_last", [])
 
-        if self.task_id in keep_last and context.get("previous_ti_success"):
+        if self.task_id in keep_last:
             print("Using last results...")
-            prev_res = pipeline_lib.load_prev_results(
-                context["ti"], self.task_id)
+            prev_res = pipeline_lib.load_prev_results(context["ti"], self.task_id)
             if prev_res is not None:
                 return prev_res
             else:
@@ -158,8 +156,7 @@ def spark_logs_probe(
     applications = requests.get(f"{spark_history_api}/applications").json()
 
     try:
-        app = next(
-            filter(lambda e: (e.get("name") == target_app_name), applications))
+        app = next(filter(lambda e: (e.get("name") == target_app_name), applications))
     except StopIteration as e:
         print(f"No {target_app_name} attempt found")
         raise e
@@ -181,8 +178,7 @@ def spark_log_analysis(evidence, expected_jobs: Set[str] = set(), prev_evidence=
             warnings.append(f"Unexpected job {job}")
 
     if prev_evidence is not None:
-        old_jobs = {job["name"].split(".scala")[0]
-                    for job in prev_evidence["jobs"]}
+        old_jobs = {job["name"].split(".scala")[0] for job in prev_evidence["jobs"]}
         for job in new_jobs:
             if job not in old_jobs:
                 warnings.append(f"New job {job} not present in previous logs")
@@ -232,8 +228,7 @@ def hdfs_config_analysis_security(config):
         warnings.append("FS access control is disabled")
         scores.append(0.1)
     if config.get("dfs.permissions.superusergroup", "supergroup") == "supergroup":
-        warnings.append(
-            "Task is running with default unrestricted permissions")
+        warnings.append("Task is running with default unrestricted permissions")
         scores.append(0.5)
     if config.get("hadoop.registry.secure", "false") == "false":
         warnings.append("Registry security is not enabled")
@@ -252,8 +247,7 @@ def spark_config_probe(master: str = "spark://localhost:7077"):
     """
     from pyspark.sql import SparkSession
 
-    spark = SparkSession.builder.appName(
-        "conf-checker").master(master).getOrCreate()
+    spark = SparkSession.builder.appName("conf-checker").master(master).getOrCreate()
     return dict(spark.sparkContext.getConf().getAll())
 
 
@@ -298,8 +292,7 @@ def hdfs_paths_probe(source_code: str) -> List[str]:
         r1 = r'["\']\s*(\w+:(\/?\/?)[^\s]+)\s*["\']'  # well formatted uri
         r2 = r'["\']\s*(.+/.+)\s*["\']'  # any string with a slash
 
-        iterator = chain(re.finditer(r1, h_source_code),
-                         re.finditer(r2, h_source_code))
+        iterator = chain(re.finditer(r1, h_source_code), re.finditer(r2, h_source_code))
 
         return list(set(s.group(1).strip() for s in iterator))
 
@@ -345,8 +338,7 @@ def requirements_check():
         score = 1.0
     else:
         ids = [(e[0], e[4]) for e in res["warnings"]]
-        scores = list(map(pipeline_lib.cve_to_score,
-                      pipeline_lib.pyupio_to_cve(ids)))
+        scores = list(map(pipeline_lib.cve_to_score, pipeline_lib.pyupio_to_cve(ids)))
 
         if all([s is None for s in scores]):  # All warnings don't have scores
             score = 0.5
@@ -470,15 +462,11 @@ def hdfs_paths_check(
 
     context = get_current_context()
 
-    airflow_task = pipeline_lib.python_task_source_extractor(
+    airflow_task = pipeline_lib.spark_submit_task_source_extractor(
         dag=context["dag"], task_id=target_task_id
     )
 
-    airflow_source = (
-        [airflow_task["source"]]
-        + list(map(str, airflow_task["args"]))
-        + list(map(str, airflow_task["kwargs"].values()))
-    )
+    airflow_source = [airflow_task["source"]] + list(map(str, airflow_task["args"]))
 
     with open(spark_file_path) as r:
         spark_source = [r.read()]
@@ -567,8 +555,7 @@ def report_generator(task_ids: Optional[Set[str]] = None):
         task_id: res for task_id, res in zip(task_ids, ti.xcom_pull(task_ids=task_ids))
     }
 
-    task_scores = {task_id: res.get("score")
-                   for task_id, res in prev_results.items()}
+    task_scores = {task_id: res.get("score") for task_id, res in prev_results.items()}
     task_warnings = {
         task_id: res.get("warnings") for task_id, res in prev_results.items()
     }
@@ -606,8 +593,7 @@ with DAG(
         #         "keep_last": '{{"pipeline.train_model" in dag_run.conf.get("keep_last", [])}}',
         #     },
         # )
-
-        train_model_t = SparkSubmitOperator(
+        train_model_t = CachingSparkSubmitOperator(
             task_id="train_model",
             application="dags/spark_classification.py",
         )
@@ -622,86 +608,63 @@ with DAG(
         requirements_check_t = CachingPythonOperator(
             task_id="requirements_check",
             python_callable=requirements_check,
-            op_kwargs={
-                "keep_last": '{{"requirements_check" in dag_run.conf.get("keep_last", [])}}',
-            },
         )
 
         python_code_check_airflow_t = CachingPythonOperator(
             task_id="python_code_check_airflow",
             python_callable=python_code_check,
-            op_kwargs={
-                "file_path": "./dags/airflow_verified_classification.py",
-                "keep_last": '{{"python_code_check_airflow" in dag_run.conf.get("keep_last", [])}}',
-            },
+            op_kwargs={"file_path": "./dags/airflow_verified_classification.py"},
         )
 
-        # python_code_check_spark_t = PythonOperator(
-        #     task_id="python_code_check_spark",
-        #     python_callable=python_code_check,
-        #     op_kwargs={
-        #         "file_path": "./dags/spark_classification.py",
-        #         "keep_last": '{{"python_code_check_spark" in dag_run.conf.get("keep_last", [])}}',
-        #     },
-        # )
+        python_code_check_spark_t = CachingPythonOperator(
+            task_id="python_code_check_spark",
+            python_callable=python_code_check,
+            op_kwargs={"file_path": "./dags/spark_classification.py"},
+        )
 
-        # hadoop_config_check_encryption_t = PythonOperator(
-        #     task_id="hadoop_config_check_encryption",
-        #     python_callable=hadoop_config_check_encryption,
-        #     op_kwargs={
-        #         "keep_last": '{{"hadoop_config_check_encryption" in dag_run.conf.get("keep_last", [])}}',
-        #     },
-        # )
+        hadoop_config_check_encryption_t = CachingPythonOperator(
+            task_id="hadoop_config_check_encryption",
+            python_callable=hadoop_config_check_encryption,
+        )
 
-        # hadoop_config_check_security_t = PythonOperator(
-        #     task_id="hadoop_config_check_security",
-        #     python_callable=hadoop_config_check_security,
-        #     op_kwargs={
-        #         "keep_last": '{{"hadoop_config_check_security" in dag_run.conf.get("keep_last", [])}}',
-        #     },
-        # )
+        hadoop_config_check_security_t = CachingPythonOperator(
+            task_id="hadoop_config_check_security",
+            python_callable=hadoop_config_check_security,
+        )
 
-        # spark_config_check_t = PythonOperator(
-        #     task_id="spark_config_check",
-        #     python_callable=spark_config_check,
-        #     op_kwargs={
-        #         "keep_last": '{{"spark_config_check" in dag_run.conf.get("keep_last", [])}}',
-        #     },
-        # )
+        spark_config_check_t = CachingPythonOperator(
+            task_id="spark_config_check",
+            python_callable=spark_config_check,
+        )
 
-        airflow_config_check_t = PythonOperator(
+        airflow_config_check_t = CachingPythonOperator(
             task_id="airflow_config_check",
             python_callable=airflow_config_check,
-            op_kwargs={
-                "keep_last": '{{"airflow_config_check" in dag_run.conf.get("keep_last", [])}}',
-            },
         )
 
-        acl_config_check = PythonOperator(
+        acl_config_check = CachingPythonOperator(
             task_id="acl_config_check",
             python_callable=acl_config_check,
             op_kwargs={
                 "expected_acl": {},
-                "keep_last": '{{"acl_config_check" in dag_run.conf.get("keep_last", [])}}',
             },
         )
 
-        # hdfs_paths_check_t = PythonOperator(
-        #     task_id="hdfs_paths_check",
-        #     python_callable=hdfs_paths_check,
-        #     op_kwargs={
-        #         "target_task_id": train_model_t.task_id,
-        #         "spark_file_path": "./dags/spark_classification.py",
-        #         "expected_paths_re": [r"hdfs://localhost.+"],
-        #         "keep_last": '{{"hdfs_paths_check" in dag_run.conf.get("keep_last", [])}}',
-        #     },
-        # )
+        hdfs_paths_check_t = CachingPythonOperator(
+            task_id="hdfs_paths_check",
+            python_callable=hdfs_paths_check,
+            op_kwargs={
+                "target_task_id": train_model_t.task_id,
+                "spark_file_path": "./dags/spark_classification.py",
+                "expected_paths_re": [r"hdfs://localhost.+"],
+            },
+        )
 
         pass
 
     with TaskGroup(group_id="post-execution-checks") as post_p1:
         # p1
-        spark_logs_check_t = PythonOperator(
+        spark_logs_check_t = CachingPythonOperator(
             task_id="spark_logs_check",
             python_callable=spark_logs_check,
             retry_delay=timedelta(seconds=5),
@@ -720,13 +683,12 @@ with DAG(
                     "treeAggregate at RDDLossFunction",
                     "treeAggregate at Summarizer",
                 },
-                "keep_last": '{{"spark_logs_check" in dag_run.conf.get("keep_last", [])}}',
                 "master": "yarn",
             },
         )
 
     with TaskGroup(group_id="assurance-report") as ass_p1:
-        report_generator_t = PythonOperator(
+        report_generator_t = CachingPythonOperator(
             task_id="report_generator", python_callable=report_generator
         )
 

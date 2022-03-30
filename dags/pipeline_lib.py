@@ -8,6 +8,7 @@ def train_model(
     model_target,
     results_target,
     app_name="spark_classification",
+    master="local",
     keep_last=False,
 ):
     """
@@ -18,8 +19,55 @@ def train_model(
     from spark_classification import train_model
     from pyspark.sql import SparkSession, Row
     from pyspark.ml.tuning import CrossValidatorModel
+    import urllib.request
 
-    spark = SparkSession.builder.appName(app_name).master("local[*]").getOrCreate()
+    gc_jars = [
+        "https://repo1.maven.org/maven2/com/google/cloud/bigdataoss/gcs-connector/hadoop3-2.1.1/gcs-connector-hadoop3-2.1.1-shaded.jar",
+        "https://repo1.maven.org/maven2/com/google/cloud/bigdataoss/bigquery-connector/hadoop3-1.2.0/bigquery-connector-hadoop3-1.2.0-shaded.jar",
+        "https://repo1.maven.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.22.2/spark-bigquery-with-dependencies_2.12-0.22.2.jar",
+    ]
+
+    files = [urllib.request.urlretrieve(url)[0] for url in gc_jars]
+
+    # Set these to your own project and bucket
+    project_id = "pipeline-assurance"
+    gcs_bucket = "pipeline-assurance-bucket"
+    credentials_file = "/home/jovyan/notebooks/gcs/bq-spark-demo.json"
+
+    spark = (
+        SparkSession.builder.appName(app_name)
+        .master(master)
+        .config("spark.jars", ",".join(files))
+        # Install and set up the OpenLineage listener
+        .config("spark.jars.packages", "io.openlineage:openlineage-spark:0.3.+")
+        .config(
+            "spark.extraListeners",
+            "io.openlineage.spark.agent.OpenLineageSparkListener",
+        )
+        .config("spark.openlineage.host", "http://localhost:5000")
+        .config("spark.openlineage.namespace", "spark_integration")
+        # Configure the Google credentials and project id
+        # .config("spark.executorEnv.GCS_PROJECT_ID", project_id)
+        # .config(
+        #     "spark.executorEnv.GOOGLE_APPLICATION_CREDENTIALS",
+        #     "/home/jovyan/notebooks/gcs/bq-spark-demo.json",
+        # )
+        # .config("spark.hadoop.google.cloud.auth.service.account.enable", "true")
+        # .config(
+        #     "spark.hadoop.google.cloud.auth.service.account.json.keyfile",
+        #     credentials_file,
+        # )
+        # .config(
+        #     "spark.hadoop.fs.gs.impl",
+        #     "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
+        # )
+        # .config(
+        #     "spark.hadoop.fs.AbstractFileSystem.gs.impl",
+        #     "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",
+        # )
+        # .config("spark.hadoop.fs.gs.project.id", project_id)
+        .getOrCreate()
+    )
 
     if str(keep_last).strip().lower() == "true":
         print("Using last results...")

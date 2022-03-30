@@ -9,3 +9,5 @@ pylint
 numpy
 
 markupsafe==2.0.1 # workaround https://github.com/pallets/markupsafe/issues/284
+
+ipython

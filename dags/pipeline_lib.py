@@ -2,7 +2,7 @@ from airflow.models import TaskInstance, DagRun
 from airflow.operators.python_operator import PythonOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from openlineage.airflow.dag import DAG
-from typing import Optional
+from typing import Optional, List, Any
 
 
 #
@@ -122,8 +122,7 @@ def train_model(
         model = CrossValidatorModel.load(model_target)  # load saved model
         data = spark.read.json(results_target)  # load saved results
     else:
-        train_set = spark.read.csv(
-            train_set.url, header=True, inferSchema=True)
+        train_set = spark.read.csv(train_set.url, header=True, inferSchema=True)
         print("Training the model...")
         model = train_model(train_set=train_set)  # train model
         print("Saving the model...")
@@ -133,8 +132,7 @@ def train_model(
                 Row(
                     app_id=spark.sparkContext.applicationId,
                     scores=model.avgMetrics,
-                    summary=[str(param)
-                             for param in model.getEstimatorParamMaps()],
+                    summary=[str(param) for param in model.getEstimatorParamMaps()],
                 )
             ]
         )  # prepare results
@@ -246,3 +244,29 @@ def cve_to_score(cve: str) -> Optional[float]:
         return res.cvss2.score_overall
     except (AssertionError, ValueError):
         return None
+
+
+def python_code_analysis(source: List[str]):
+    """
+    Run pylint on the source code
+    """
+    from tempfile import NamedTemporaryFile
+    import json
+    import subprocess
+
+    with NamedTemporaryFile("w") as temp_f:
+        temp_f.writelines(source)
+        temp_f.flush()
+
+        data = (
+            subprocess.run(
+                ["pylint", "--output-format=json", temp_f.name],
+                stdout=subprocess.PIPE,
+                check=False,
+            )
+            .stdout.decode()
+            .strip()
+        )
+        res = json.loads(data)
+
+        return {"evidence": source, "warnings": res}

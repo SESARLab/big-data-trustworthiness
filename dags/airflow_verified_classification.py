@@ -8,9 +8,10 @@ from pipeline_lib import (
     CachingSparkSubmitOperator,
     cve_to_score,
     load_prev_results,
-    task_args_extractor,
+    python_code_analysis,
     pyupio_to_cve,
     spark_submit_task_source_extractor,
+    task_args_extractor,
 )
 
 default_args = {
@@ -79,32 +80,6 @@ def requirements_analysis(requirements: Optional[List[str]]):
     res = json.loads(data)
 
     return {"evidence": requirements, "warnings": res}
-
-
-def python_code_analysis(source: List[str]):
-    """
-    Run pylint on the source code
-    """
-    from tempfile import NamedTemporaryFile
-    import json
-    import subprocess
-
-    with NamedTemporaryFile("w") as temp_f:
-        temp_f.writelines(source)
-        temp_f.flush()
-
-        data = (
-            subprocess.run(
-                ["pylint", "--output-format=json", temp_f.name],
-                stdout=subprocess.PIPE,
-                check=False,
-            )
-            .stdout.decode()
-            .strip()
-        )
-        res = json.loads(data)
-
-        return {"evidence": source, "warnings": res}
 
 
 def spark_logs_probe(
@@ -591,57 +566,7 @@ with DAG(
         )
 
     with TaskGroup(group_id="pre-execution-checks") as pre_p1:
-        # p4
-        lineage_check_t = CachingPythonOperator(
-            task_id="lineage_check",
-            python_callable=lineage_check,
-        )
-
-        requirements_check_t = CachingPythonOperator(
-            task_id="requirements_check",
-            python_callable=requirements_check,
-        )
-
-        python_code_check_airflow_t = CachingPythonOperator(
-            task_id="python_code_check_airflow",
-            python_callable=python_code_check,
-            op_kwargs={"file_path": "./dags/airflow_verified_classification.py"},
-        )
-
-        python_code_check_spark_t = CachingPythonOperator(
-            task_id="python_code_check_spark",
-            python_callable=python_code_check,
-            op_kwargs={"file_path": "./dags/spark_classification.py"},
-        )
-
-        hadoop_config_check_encryption_t = CachingPythonOperator(
-            task_id="hadoop_config_check_encryption",
-            python_callable=hadoop_config_check_encryption,
-        )
-
-        hadoop_config_check_security_t = CachingPythonOperator(
-            task_id="hadoop_config_check_security",
-            python_callable=hadoop_config_check_security,
-        )
-
-        spark_config_check_t = CachingPythonOperator(
-            task_id="spark_config_check",
-            python_callable=spark_config_check,
-        )
-
-        airflow_config_check_t = CachingPythonOperator(
-            task_id="airflow_config_check",
-            python_callable=airflow_config_check,
-        )
-
-        acl_config_check = CachingPythonOperator(
-            task_id="acl_config_check",
-            python_callable=acl_config_check,
-            op_kwargs={
-                "expected_acl": {},
-            },
-        )
-
+        # p2
         hdfs_paths_check_t = CachingPythonOperator(
             task_id="hdfs_paths_check",
             python_callable=hdfs_paths_check,
@@ -652,6 +577,7 @@ with DAG(
             },
         )
 
+        # p3
         task_args_check_t = CachingPythonOperator(
             task_id="task_args_check",
             python_callable=task_args_check,
@@ -662,6 +588,74 @@ with DAG(
                     "args": None,
                 },
             },
+        )
+
+        # p4
+        lineage_check_t = CachingPythonOperator(
+            task_id="lineage_check",
+            python_callable=lineage_check,
+        )
+
+        # p5
+        python_code_check_spark_t = CachingPythonOperator(
+            task_id="python_code_check_spark",
+            python_callable=python_code_check,
+            op_kwargs={"file_path": "./dags/spark_classification.py"},
+        )
+
+        # p6
+        requirements_check_t = CachingPythonOperator(
+            task_id="requirements_check",
+            python_callable=requirements_check,
+        )
+
+        # p7
+        # TODO check sul dag
+
+        # p8
+        # TODO check sui permessi in lettura
+
+        # p9
+        # TODO check sui permessi in scrittura
+
+        # p10
+        hadoop_config_check_encryption_t = CachingPythonOperator(
+            task_id="hadoop_config_check_encryption",
+            python_callable=hadoop_config_check_encryption,
+        )
+
+        # p11
+        hadoop_config_check_security_t = CachingPythonOperator(
+            task_id="hadoop_config_check_security",
+            python_callable=hadoop_config_check_security,
+        )
+
+        # p12
+        spark_config_check_t = CachingPythonOperator(
+            task_id="spark_config_check",
+            python_callable=spark_config_check,
+        )
+
+        # p13
+        airflow_config_check_t = CachingPythonOperator(
+            task_id="airflow_config_check",
+            python_callable=airflow_config_check,
+        )
+
+        # p14
+        acl_config_check = CachingPythonOperator(
+            task_id="acl_config_check",
+            python_callable=acl_config_check,
+            op_kwargs={
+                "expected_acl": {},
+            },
+        )
+
+        # p17
+        python_code_check_airflow_t = CachingPythonOperator(
+            task_id="python_code_check_airflow",
+            python_callable=python_code_check,
+            op_kwargs={"file_path": "./dags/airflow_verified_classification.py"},
         )
 
         pass

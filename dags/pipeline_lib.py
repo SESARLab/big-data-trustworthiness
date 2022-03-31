@@ -1,6 +1,54 @@
-from airflow.models import TaskInstance
+from airflow.models import TaskInstance, DagRun
+from airflow.operators.python_operator import PythonOperator
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from openlineage.airflow.dag import DAG
 from typing import Optional
+
+
+#
+# Custom operators
+#
+
+
+class CachingPythonOperator(PythonOperator):
+    from airflow.utils.context import Context
+
+    def execute(self, context: Context):
+        dag_run: DagRun = context["dag_run"]
+        keep_last = dag_run.conf.get("keep_last", [])
+
+        if self.task_id in keep_last:
+            print("Using last results...")
+            prev_res = load_prev_results(context["ti"], self.task_id)
+            if prev_res is not None:
+                return prev_res
+            else:
+                print("No previous results found...")
+
+        return super().execute(context=context)
+
+
+class CachingSparkSubmitOperator(SparkSubmitOperator):
+    from airflow.utils.context import Context
+
+    def execute(self, context: Context) -> None:
+        dag_run: DagRun = context["dag_run"]
+        keep_last = dag_run.conf.get("keep_last", [])
+
+        if self.task_id in keep_last:
+            print("Using last results...")
+            prev_res = load_prev_results(context["ti"], self.task_id)
+            if prev_res is not None:
+                return prev_res
+            else:
+                print("No previous results found...")
+
+        return {"res": super().execute(context=context)}
+
+
+#
+# Training task
+#
 
 
 def train_model(
@@ -117,6 +165,21 @@ def python_task_source_extractor(
         "args": python_args,
         "kwargs": python_kwargs,
     }
+
+
+def task_args_extractor(dag: DAG, task_id: str):
+    """
+    Get the operator arguments
+    """
+    task = dag.get_task(task_id=task_id)
+    if issubclass(type(task), PythonOperator):
+        task: PythonOperator
+        return {"args": task.op_args, "kwargs": task.op_kwargs}
+    elif issubclass(type(task), SparkSubmitOperator):
+        task: SparkSubmitOperator
+        return {"application": task._application, "args": task._application_args}
+    else:
+        return vars(task)
 
 
 def spark_submit_task_source_extractor(

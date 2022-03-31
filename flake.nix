@@ -43,8 +43,8 @@
         HADOOP_HOME = "${pkgs.hadoop}/lib/${pkgs.hadoop.untarDir}";
         SPARK_HOME = "${pkgs.spark}/lib/${pkgs.spark.untarDir}";
         OPENLINEAGE_URL = "http://localhost:5000";
-        HADOOP_CONF_DIR = "/nix/store/77jir5wdg8asbpr4pd5gs73y49mjr8f2-hadoop-conf";
-        SPARK_CONF_DIR = "/nix/store/4p8pg9hi52c2wq8r0hwi0b1643gi9xia-spark-conf";
+        HADOOP_CONF_DIR = "/nix/store/i29h9l4qq8rrbcb2011cigqwj6ggb5id-hadoop-conf";
+        SPARK_CONF_DIR = "/nix/store/f1cd0cpgwg8236bk1y6r7zmmxs53k9cw-spark-conf";
         # SPARK_LOG_DIR = "/var/log/spark";
         # SPARK_MASTER_HOST = "127.0.0.1";
 

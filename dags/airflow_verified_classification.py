@@ -1,11 +1,17 @@
 from airflow.lineage.entities import File
-from airflow.operators.python import PythonOperator
+from airflow.utils.task_group import TaskGroup
 from datetime import timedelta, datetime
 from openlineage.airflow.dag import DAG
-from typing import List, Set, Optional
-import pipeline_lib
-from airflow.utils.task_group import TaskGroup
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from typing import List, Set, Optional, Any, Dict
+from pipeline_lib import (
+    CachingPythonOperator,
+    CachingSparkSubmitOperator,
+    cve_to_score,
+    load_prev_results,
+    task_args_extractor,
+    pyupio_to_cve,
+    spark_submit_task_source_extractor,
+)
 
 default_args = {
     "owner": "airflow",
@@ -29,48 +35,6 @@ default_args = {
     # 'sla_miss_callback': yet_another_function,
     # 'trigger_rule': 'all_success',
 }
-
-
-class CachingPythonOperator(PythonOperator):
-    from airflow.utils.context import Context
-
-    def execute(self, context: Context):
-        from airflow.models import DagRun
-
-        dag_run: DagRun = context["dag_run"]
-        keep_last = dag_run.conf.get("keep_last", [])
-
-        if self.task_id in keep_last:
-            print("Using last results...")
-            prev_res = pipeline_lib.load_prev_results(context["ti"], self.task_id)
-            if prev_res is not None:
-                return prev_res
-            else:
-                print("No previous results found...")
-
-        return super().execute(context=context)
-
-
-class CachingSparkSubmitOperator(SparkSubmitOperator):
-    from airflow.utils.context import Context
-
-    def execute(self, context: Context) -> None:
-        from airflow.models import DagRun
-
-        dag_run: DagRun = context["dag_run"]
-        keep_last = dag_run.conf.get("keep_last", [])
-
-        if self.task_id in keep_last:
-            print("Using last results...")
-            prev_res = pipeline_lib.load_prev_results(context["ti"], self.task_id)
-            if prev_res is not None:
-                return prev_res
-            else:
-                print("No previous results found...")
-
-        super().execute(context=context)
-        return {"driver_status": self._hook._driver_status}
-
 
 #
 # Probes and analysis
@@ -338,7 +302,7 @@ def requirements_check():
         score = 1.0
     else:
         ids = [(e[0], e[4]) for e in res["warnings"]]
-        scores = list(map(pipeline_lib.cve_to_score, pipeline_lib.pyupio_to_cve(ids)))
+        scores = list(map(cve_to_score, pyupio_to_cve(ids)))
 
         if all([s is None for s in scores]):  # All warnings don't have scores
             score = 0.5
@@ -452,6 +416,34 @@ def acl_config_check(expected_acl):
     }
 
 
+def task_args_check(
+    target_task_id: str,
+    expected_args: Dict[str, Any] = [],
+):
+    from airflow.operators.python import get_current_context
+    from pprint import pprint
+
+    args = task_args_extractor(dag=get_current_context()["dag"], task_id=target_task_id)
+
+    print("FOUND ARGS:")
+    pprint(args)
+
+    print("EXPECTED ARGS:")
+    pprint(expected_args)
+
+    evidence = {"args": args}
+    warnings = list(
+        set(
+            f"Unexpected arg {arg} with value {val}"
+            for arg, val in args.items()
+            if arg not in expected_args.keys() or val != expected_args.get(arg)
+        )
+    )
+    score = 1.0 if len(warnings) == 0 else 0.0
+
+    return {"evidence": evidence, "warnings": warnings, "score": score}
+
+
 def hdfs_paths_check(
     target_task_id: str,
     spark_file_path: str,
@@ -462,7 +454,7 @@ def hdfs_paths_check(
 
     context = get_current_context()
 
-    airflow_task = pipeline_lib.spark_submit_task_source_extractor(
+    airflow_task = spark_submit_task_source_extractor(
         dag=context["dag"], task_id=target_task_id
     )
 
@@ -509,7 +501,7 @@ def spark_logs_check(
     )
 
     try:
-        prev_res = pipeline_lib.load_prev_results(ti, "pipeline.train_model")
+        prev_res = load_prev_results(ti, "pipeline.train_model")
         if prev_res is None:
             prev_evidence = None
         else:
@@ -655,8 +647,20 @@ with DAG(
             python_callable=hdfs_paths_check,
             op_kwargs={
                 "target_task_id": train_model_t.task_id,
-                "spark_file_path": "./dags/spark_classification.py",
+                "spark_file_path": "dags/spark_classification.py",
                 "expected_paths_re": [r"hdfs://localhost.+"],
+            },
+        )
+
+        task_args_check_t = CachingPythonOperator(
+            task_id="task_args_check",
+            python_callable=task_args_check,
+            op_kwargs={
+                "target_task_id": train_model_t.task_id,
+                "expected_args": {
+                    "application": "dags/spark_classification.py",
+                    "args": None,
+                },
             },
         )
 

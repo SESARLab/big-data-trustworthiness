@@ -643,6 +643,9 @@ with DAG(
         )
 
         # p14
+        # TODO: test su kerveros
+
+        # p15
         acl_config_check = CachingPythonOperator(
             task_id="acl_config_check",
             python_callable=acl_config_check,
@@ -684,6 +687,9 @@ with DAG(
                 "master": "yarn",
             },
         )
+
+        # p16
+        # TODO: Monitoring probe su ranger
 
     with TaskGroup(group_id="assurance-report") as ass_p1:
         report_generator_t = CachingPythonOperator(

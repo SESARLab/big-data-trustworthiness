@@ -12,6 +12,7 @@ from pipeline_lib import (
     pyupio_to_cve,
     spark_submit_task_source_extractor,
     task_args_extractor,
+    get_hdfs_file_permissions,
 )
 
 default_args = {
@@ -507,6 +508,76 @@ def lineage_check():
     return {"evidence": {}, "warnings": [], "score": 1.0}
 
 
+def hdfs_file_permission_check(
+    path: str,
+    owner: Optional[str] = None,
+    group: Optional[str] = None,
+    expected_permissions: Optional[int] = None,
+):
+    res = get_hdfs_file_permissions(path)
+    assert len(res) == 1
+    res = res[0]
+    warnings = []
+    score = 1.0
+    if owner is not None and res["owner"] != owner:
+        warnings.append(f"Unexpected owner {res['owner']} for {path}")
+        score = 0.0
+    if group is not None and res["group"] != group:
+        warnings.append(f"Unexpected group {res['group']} for {path}")
+        score = 0.0
+    if expected_permissions is not None and res["permissions"] != expected_permissions:
+        score = 1.0
+        warnings = [f"Unexpected permissions {res['permissions']} for {path}"]
+
+    return {"evidence": res, "warnings": warnings, "score": score}
+
+
+def hdfs_file_can_write(
+    path: str, user: Optional[str] = None, group: Optional[str] = None
+):
+    res = get_hdfs_file_permissions(path)
+    assert len(res) == 1
+    res = res[0]
+    perms = res["pad_permissions"]
+    WRITE_OCTALS = "2367"
+
+    if (
+        (user == res["owner"] and perms[-3] in WRITE_OCTALS)
+        or (group == res["group"] and perms[-2] in WRITE_OCTALS)
+        or (perms[-1] in WRITE_OCTALS)
+    ):
+        score = 1.0
+        warnings = []
+    else:
+        score = 0.0
+        warnings = [f"Cannot write to {path}"]
+
+    return {"evidence": res, "warnings": warnings, "score": score}
+
+
+def hdfs_file_can_read(
+    path: str, user: Optional[str] = None, group: Optional[str] = None
+):
+    res = get_hdfs_file_permissions(path)
+    assert len(res) == 1
+    res = res[0]
+    perms = res["pad_permissions"]
+    READ_OCTALS = "4567"
+
+    if (
+        (user == res["owner"] and perms[-3] in READ_OCTALS)
+        or (group == res["group"] and perms[-2] in READ_OCTALS)
+        or (perms[-1] in READ_OCTALS)
+    ):
+        score = 1.0
+        warnings = []
+    else:
+        score = 0.0
+        warnings = [f"Cannot read from {path}"]
+
+    return {"evidence": res, "warnings": warnings, "score": score}
+
+
 def report_generator(task_ids: Optional[Set[str]] = None):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
@@ -613,10 +684,24 @@ with DAG(
         # TODO check sul dag
 
         # p8
-        # TODO check sui permessi in lettura
+        read_permission_check_t = CachingPythonOperator(
+            task_id="read_permission_check",
+            python_callable=hdfs_file_can_read,
+            op_kwargs={
+                "user": "bertof",
+                "group": "hadoop",
+            },
+        )
 
         # p9
-        # TODO check sui permessi in scrittura
+        write_permission_check_t = CachingPythonOperator(
+            task_id="write_permission_check",
+            python_callable=hdfs_file_can_write,
+            op_kwargs={
+                "user": "bertof",
+                "group": "hadoop",
+            },
+        )
 
         # p10
         hadoop_config_check_encryption_t = CachingPythonOperator(

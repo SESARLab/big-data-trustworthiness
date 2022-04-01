@@ -31,8 +31,8 @@
           pythonPackages.virtualenv
           # pythonPackages.ipython
 
-          pythonPackages.numpy
-          pythonPackages.pyspark
+          # pythonPackages.numpy
+          # pythonPackages.pyspark
           # pythonPackages.apache-airflow # crash while running webserver
 
           # hadoop
@@ -60,7 +60,7 @@
         postShellHook = ''
           # allow pip to install wheels
           unset SOURCE_DATE_EPOCH
-          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/
+          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/:${pkgs.stdenv.cc.cc.lib}/lib
           export AIRFLOW_HOME=`pwd`
         '';
       };

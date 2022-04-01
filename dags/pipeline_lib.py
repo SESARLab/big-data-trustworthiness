@@ -2,6 +2,7 @@ from airflow.models import TaskInstance, DagRun
 from airflow.operators.python_operator import PythonOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from openlineage.airflow.dag import DAG
+from pyspark.sql import SparkSession
 from typing import Optional, List, Any
 
 
@@ -57,6 +58,7 @@ def train_model(
     results_target,
     app_name="spark_classification",
     master="local",
+    ss: Optional[SparkSession] = None,
     keep_last=False,
 ):
     """
@@ -65,7 +67,7 @@ def train_model(
     Example of ML pipeline task.
     """
     from spark_classification import train_model
-    from pyspark.sql import SparkSession, Row
+    from pyspark.sql import Row
     from pyspark.ml.tuning import CrossValidatorModel
     import urllib.request
 
@@ -82,55 +84,56 @@ def train_model(
     gcs_bucket = "pipeline-assurance-bucket"
     credentials_file = "/home/jovyan/notebooks/gcs/bq-spark-demo.json"
 
-    spark = (
-        SparkSession.builder.appName(app_name)
-        .master(master)
-        .config("spark.jars", ",".join(files))
-        # Install and set up the OpenLineage listener
-        .config("spark.jars.packages", "io.openlineage:openlineage-spark:0.3.+")
-        .config(
-            "spark.extraListeners",
-            "io.openlineage.spark.agent.OpenLineageSparkListener",
+    if ss is None:
+        ss = (
+            SparkSession.builder.appName(app_name)
+            .master(master)
+            .config("spark.jars", ",".join(files))
+            # Install and set up the OpenLineage listener
+            .config("spark.jars.packages", "io.openlineage:openlineage-spark:0.3.+")
+            .config(
+                "spark.extraListeners",
+                "io.openlineage.spark.agent.OpenLineageSparkListener",
+            )
+            .config("spark.openlineage.host", "http://localhost:5000")
+            .config("spark.openlineage.namespace", "spark_integration")
+            # Configure the Google credentials and project id
+            # .config("spark.executorEnv.GCS_PROJECT_ID", project_id)
+            # .config(
+            #     "spark.executorEnv.GOOGLE_APPLICATION_CREDENTIALS",
+            #     "/home/jovyan/notebooks/gcs/bq-spark-demo.json",
+            # )
+            # .config("spark.hadoop.google.cloud.auth.service.account.enable", "true")
+            # .config(
+            #     "spark.hadoop.google.cloud.auth.service.account.json.keyfile",
+            #     credentials_file,
+            # )
+            # .config(
+            #     "spark.hadoop.fs.gs.impl",
+            #     "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
+            # )
+            # .config(
+            #     "spark.hadoop.fs.AbstractFileSystem.gs.impl",
+            #     "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",
+            # )
+            # .config("spark.hadoop.fs.gs.project.id", project_id)
+            .getOrCreate()
         )
-        .config("spark.openlineage.host", "http://localhost:5000")
-        .config("spark.openlineage.namespace", "spark_integration")
-        # Configure the Google credentials and project id
-        # .config("spark.executorEnv.GCS_PROJECT_ID", project_id)
-        # .config(
-        #     "spark.executorEnv.GOOGLE_APPLICATION_CREDENTIALS",
-        #     "/home/jovyan/notebooks/gcs/bq-spark-demo.json",
-        # )
-        # .config("spark.hadoop.google.cloud.auth.service.account.enable", "true")
-        # .config(
-        #     "spark.hadoop.google.cloud.auth.service.account.json.keyfile",
-        #     credentials_file,
-        # )
-        # .config(
-        #     "spark.hadoop.fs.gs.impl",
-        #     "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
-        # )
-        # .config(
-        #     "spark.hadoop.fs.AbstractFileSystem.gs.impl",
-        #     "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",
-        # )
-        # .config("spark.hadoop.fs.gs.project.id", project_id)
-        .getOrCreate()
-    )
 
     if str(keep_last).strip().lower() == "true":
         print("Using last results...")
         model = CrossValidatorModel.load(model_target)  # load saved model
-        data = spark.read.json(results_target)  # load saved results
+        data = ss.read.json(results_target)  # load saved results
     else:
-        train_set = spark.read.csv(train_set.url, header=True, inferSchema=True)
+        train_set = ss.read.csv(train_set.url, header=True, inferSchema=True)
         print("Training the model...")
         model = train_model(train_set=train_set)  # train model
         print("Saving the model...")
         model.write().overwrite().save(model_target)  # save model
-        data = spark.createDataFrame(
+        data = ss.createDataFrame(
             data=[
                 Row(
-                    app_id=spark.sparkContext.applicationId,
+                    app_id=ss.sparkContext.applicationId,
                     scores=model.avgMetrics,
                     summary=[str(param) for param in model.getEstimatorParamMaps()],
                 )
@@ -141,6 +144,23 @@ def train_model(
     res = [{k: e[k] for k in data.columns} for e in data.collect()][0]
 
     return res
+
+
+def get_hdfs_file_permissions(path: str, ss: Optional[SparkSession] = None):
+    if ss is None:
+        ss = SparkSession.builder.appName("permission_checker").getOrCreate()
+    fs = ss._jvm.org.apache.hadoop.fs.FileSystem.get(ss._jsc.hadoopConfiguration())
+    list_status = fs.listStatus(ss._jvm.org.apache.hadoop.fs.Path(path))
+    return [
+        {
+            "file": file.getPath().getName(),
+            "owner": file.getOwner(),
+            "group": file.getGroup(),
+            "permissions": file.getPermission().toOctal(),
+            "pad_permissions": f"{file.getPermission().toOctal():04}",
+        }
+        for file in list_status
+    ]
 
 
 def python_task_source_extractor(

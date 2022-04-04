@@ -1,11 +1,8 @@
 from datetime import timedelta, datetime
-
 from airflow.lineage.entities import File
-from airflow.operators.python import PythonOperator
-
+from airflow.utils.task_group import TaskGroup
 from openlineage.airflow.dag import DAG
-
-import pipeline_lib
+from pipeline_lib import CachingSparkSubmitOperator
 
 default_args = {
     "owner": "airflow",
@@ -42,16 +39,8 @@ with DAG(
     # Data from https://www.kaggle.com/c/titanic/data?select=train.csv
     train_set = File("hdfs://localhost:/titanic/train.csv")
 
-    train_model_t = PythonOperator(
-        task_id="train_model_task",
-        python_callable=pipeline_lib.train_model,
-        op_kwargs={
-            "train_set": train_set,
-            "model_target": "/titanic/model",
-            "results_target": "/titanic/results",
-            "app_name": "spark_classification",
-            "keep_last": '{{"train_model_task" in dag_run.conf.get("keep_last", [])}}',
-        },
-    )
-
-    train_model_t
+    with TaskGroup(group_id="pipeline") as p1:
+        train_model_t = CachingSparkSubmitOperator(
+            task_id="train_model",
+            application="dags/spark_classification.py",
+        )

@@ -2,7 +2,7 @@
   description = "A very basic flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -29,9 +29,11 @@
           # Those are dependencies that we would like to use from nixpkgs, which will
           # add them to PYTHONPATH and thus make them accessible from within the venv.
           pythonPackages.virtualenv
-          pythonPackages.ipython
+          # pythonPackages.ipython
 
-          pythonPackages.numpy
+          # pythonPackages.numpy
+          # pythonPackages.pyspark
+          # pythonPackages.apache-airflow # crash while running webserver
 
           # hadoop
           # spark
@@ -41,8 +43,8 @@
         HADOOP_HOME = "${pkgs.hadoop}/lib/${pkgs.hadoop.untarDir}";
         SPARK_HOME = "${pkgs.spark}/lib/${pkgs.spark.untarDir}";
         OPENLINEAGE_URL = "http://localhost:5000";
-        HADOOP_CONF_DIR = "/nix/store/95kxmcs9kcc7vzl5yrsxz3p9bsficdng-hadoop-conf";
-        SPARK_CONF_DIR = "/nix/store/lhym036ki3mgjvcbwb1wnwjviynzfmr8-spark-config";
+        HADOOP_CONF_DIR = "/nix/store/i29h9l4qq8rrbcb2011cigqwj6ggb5id-hadoop-conf";
+        SPARK_CONF_DIR = "/nix/store/f1cd0cpgwg8236bk1y6r7zmmxs53k9cw-spark-conf";
         # SPARK_LOG_DIR = "/var/log/spark";
         # SPARK_MASTER_HOST = "127.0.0.1";
 
@@ -58,7 +60,7 @@
         postShellHook = ''
           # allow pip to install wheels
           unset SOURCE_DATE_EPOCH
-          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/
+          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/:${pkgs.stdenv.cc.cc.lib}/lib
           export AIRFLOW_HOME=`pwd`
         '';
       };

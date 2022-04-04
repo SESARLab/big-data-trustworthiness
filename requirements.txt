@@ -1,11 +1,13 @@
-apache-airflow==2.2.4
-apache-airflow-providers-apache-spark==2.1.0
+apache-airflow
+apache-airflow-providers-apache-spark
 
-openlineage-airflow==0.5.2
+openlineage-airflow
 
-pyspark==3.2.1
-safety==1.10.3
 pylint
-numpy
+pyspark
+numpy # optional dependency of pyspark
+safety
 
 markupsafe==2.0.1 # workaround https://github.com/pallets/markupsafe/issues/284
+
+ipython

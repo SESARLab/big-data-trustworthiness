@@ -1,10 +1,19 @@
 from airflow.lineage.entities import File
-from airflow.operators.python import PythonOperator
+from airflow.utils.task_group import TaskGroup
 from datetime import timedelta, datetime
 from openlineage.airflow.dag import DAG
-from typing import List, Set, Optional
-import pipeline_lib
-from airflow.utils.task_group import TaskGroup
+from typing import List, Set, Optional, Any, Dict
+from pipeline_lib import (
+    CachingPythonOperator,
+    CachingSparkSubmitOperator,
+    cve_to_score,
+    load_prev_results,
+    python_code_analysis,
+    pyupio_to_cve,
+    spark_submit_task_source_extractor,
+    task_args_extractor,
+    get_hdfs_file_permissions,
+)
 
 default_args = {
     "owner": "airflow",
@@ -74,34 +83,8 @@ def requirements_analysis(requirements: Optional[List[str]]):
     return {"evidence": requirements, "warnings": res}
 
 
-def python_code_analysis(source: List[str]):
-    """
-    Run pylint on the source code
-    """
-    from tempfile import NamedTemporaryFile
-    import json
-    import subprocess
-
-    with NamedTemporaryFile("w") as temp_f:
-        temp_f.writelines(source)
-        temp_f.flush()
-
-        data = (
-            subprocess.run(
-                ["pylint", "--output-format=json", temp_f.name],
-                stdout=subprocess.PIPE,
-                check=False,
-            )
-            .stdout.decode()
-            .strip()
-        )
-        res = json.loads(data)
-
-        return {"evidence": source, "warnings": res}
-
-
-def spark_log_probe(
-    app_id: str,
+def spark_logs_probe(
+    target_app_name: str,
     spark_history_api: str = "http://localhost:18080/api/v1",
 ):
     """
@@ -110,7 +93,15 @@ def spark_log_probe(
     """
     import requests
 
-    base_path = f"{spark_history_api}/applications/{app_id}"
+    applications = requests.get(f"{spark_history_api}/applications").json()
+
+    try:
+        app = next(filter(lambda e: (e.get("name") == target_app_name), applications))
+    except StopIteration as e:
+        print(f"No {target_app_name} attempt found")
+        raise e
+
+    base_path = f"{spark_history_api}/applications/{app['id']}"
 
     return {
         "allexecutors": requests.get(f"{base_path}/allexecutors").json(),
@@ -215,8 +206,6 @@ def spark_config_analysis(config):
 
 
 def airflow_config_analysis(config):
-    from pprint import pprint
-
     warnings = []
     scores = []
 
@@ -277,19 +266,7 @@ def hdfs_paths_probe(source_code: str) -> List[str]:
 #
 
 
-def requirements_check(keep_last=False):
-    from airflow.operators.python import get_current_context
-
-    ti = get_current_context()["ti"]
-
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
-        if prev_res is not None:
-            return prev_res
-        else:
-            print("No previous results found...")
-
+def requirements_check():
     with open("requirements.txt") as f:
         requirements = list(f.readlines())
 
@@ -299,7 +276,7 @@ def requirements_check(keep_last=False):
         score = 1.0
     else:
         ids = [(e[0], e[4]) for e in res["warnings"]]
-        scores = list(map(pipeline_lib.cve_to_score, pipeline_lib.pyupio_to_cve(ids)))
+        scores = list(map(cve_to_score, pyupio_to_cve(ids)))
 
         if all([s is None for s in scores]):  # All warnings don't have scores
             score = 0.5
@@ -315,19 +292,7 @@ def requirements_check(keep_last=False):
     }
 
 
-def python_code_check(file_path: str, keep_last=False):
-    from airflow.operators.python import get_current_context
-
-    ti = get_current_context()["ti"]
-
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
-        if prev_res is not None:
-            return prev_res
-        else:
-            print("No previous results found...")
-
+def python_code_check(file_path: str):
     with open(file=file_path) as f:
         source_code = list(f.readlines())
     res = python_code_analysis(source=source_code)
@@ -349,19 +314,7 @@ def python_code_check(file_path: str, keep_last=False):
     }
 
 
-def hadoop_config_check_encryption(keep_last=False):
-    from airflow.operators.python import get_current_context
-
-    ti = get_current_context()["ti"]
-
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
-        if prev_res is not None:
-            return prev_res
-        else:
-            print("No previous results found...")
-
+def hadoop_config_check_encryption():
     config = hdfs_config_probe()
     res = hdfs_config_analysis_encryption(config)
     score = min(res["scores"] + [1.0])  # min of scores or default to 1.0
@@ -373,19 +326,7 @@ def hadoop_config_check_encryption(keep_last=False):
     }
 
 
-def hadoop_config_check_security(keep_last=False):
-    from airflow.operators.python import get_current_context
-
-    ti = get_current_context()["ti"]
-
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
-        if prev_res is not None:
-            return prev_res
-        else:
-            print("No previous results found...")
-
+def hadoop_config_check_security():
     config = hdfs_config_probe()
     res = hdfs_config_analysis_security(config)
     score = min(res["scores"] + [1.0])  # min of scores or default to 1.0
@@ -397,20 +338,7 @@ def hadoop_config_check_security(keep_last=False):
     }
 
 
-def spark_config_check(master: str = "spark://localhost:7077", keep_last=False):
-    from airflow.models import TaskInstance
-    from airflow.operators.python import get_current_context
-
-    ti: TaskInstance = get_current_context()["ti"]
-
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
-        if prev_res is not None:
-            return prev_res
-        else:
-            print("No previous results found...")
-
+def spark_config_check(master: str = "spark://localhost:7077"):
     config = spark_config_probe(master)
     res = spark_config_analysis(config)
     score = min(res["scores"] + [1.0])  # min of scores or default to 1.0
@@ -422,21 +350,8 @@ def spark_config_check(master: str = "spark://localhost:7077", keep_last=False):
     }
 
 
-def airflow_config_check(keep_last=False):
+def airflow_config_check():
     from airflow.configuration import conf
-    from airflow.models import TaskInstance
-    from airflow.operators.python import get_current_context
-    from pprint import pprint
-
-    ti: TaskInstance = get_current_context()["ti"]
-
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
-        if prev_res is not None:
-            return prev_res
-        else:
-            print("No previous results found...")
 
     config = conf.as_dict(display_sensitive=True)
     res = airflow_config_analysis(config)
@@ -449,36 +364,71 @@ def airflow_config_check(keep_last=False):
     }
 
 
+def acl_config_check(expected_acl):
+    from airflow.models import TaskInstance
+    from airflow.operators.python import get_current_context
+
+    ti: TaskInstance = get_current_context()["ti"]
+
+    acl = ti.task.dag.access_control
+    if acl is None:
+        acl = dict()
+    evidence = acl
+    warnings = [
+        f"Unexpected ({k},{v})" for k, v in acl.items() if expected_acl.get(k, {}) != v
+    ]
+    score = 1.0 if len(warnings) == 0 else 0.0
+
+    return {
+        "evidence": evidence,
+        "warnings": warnings,
+        "score": score,
+    }
+
+
+def task_args_check(
+    target_task_id: str,
+    expected_args: Dict[str, Any] = [],
+):
+    from airflow.operators.python import get_current_context
+    from pprint import pprint
+
+    args = task_args_extractor(dag=get_current_context()["dag"], task_id=target_task_id)
+
+    print("FOUND ARGS:")
+    pprint(args)
+
+    print("EXPECTED ARGS:")
+    pprint(expected_args)
+
+    evidence = {"args": args}
+    warnings = list(
+        set(
+            f"Unexpected arg {arg} with value {val}"
+            for arg, val in args.items()
+            if arg not in expected_args.keys() or val != expected_args.get(arg)
+        )
+    )
+    score = 1.0 if len(warnings) == 0 else 0.0
+
+    return {"evidence": evidence, "warnings": warnings, "score": score}
+
+
 def hdfs_paths_check(
     target_task_id: str,
     spark_file_path: str,
     expected_paths_re: List[str] = [],
-    keep_last=False,
 ):
-    from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
     import re
 
     context = get_current_context()
-    ti: TaskInstance = context["ti"]
 
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
-        if prev_res is not None:
-            return prev_res
-        else:
-            print("No previous results found...")
-
-    airflow_task = pipeline_lib.python_task_source_extractor(
+    airflow_task = spark_submit_task_source_extractor(
         dag=context["dag"], task_id=target_task_id
     )
 
-    airflow_source = (
-        [airflow_task["source"]]
-        + list(map(str, airflow_task["args"]))
-        + list(map(str, airflow_task["kwargs"].values()))
-    )
+    airflow_source = [airflow_task["source"]] + list(map(str, airflow_task["args"]))
 
     with open(spark_file_path) as r:
         spark_source = [r.read()]
@@ -507,35 +457,27 @@ def hdfs_paths_check(
 
 
 def spark_logs_check(
+    target_app_name: str,
     spark_history_api="http://localhost:18080/api/v1",
     expected_jobs: Set[str] = set(),
-    keep_last=False,
 ):
     from airflow.models import TaskInstance
     from airflow.operators.python import get_current_context
 
     ti: TaskInstance = get_current_context()["ti"]
 
-    if str(keep_last).strip().lower() == "true":
-        print("Using last results...")
-        prev_res = pipeline_lib.load_prev_results(ti, ti.task_id)
-        if prev_res is not None:
-            return prev_res
-        else:
-            print("No previous results found...")
-
-    model_data = ti.xcom_pull("pipeline.train_model")
-    app_id = model_data["app_id"]
-    evidence = spark_log_probe(app_id=app_id, spark_history_api=spark_history_api)
+    evidence = spark_logs_probe(
+        target_app_name=target_app_name, spark_history_api=spark_history_api
+    )
 
     try:
-        prev_res = pipeline_lib.load_prev_results(ti, "pipeline.train_model")
+        prev_res = load_prev_results(ti, "pipeline.train_model")
         if prev_res is None:
             prev_evidence = None
         else:
             prev_app_id = prev_res["app_id"]
-            prev_evidence = spark_log_probe(
-                app_id=prev_app_id, spark_history_api=spark_history_api
+            prev_evidence = spark_logs_probe(
+                app_name=prev_app_id, spark_history_api=spark_history_api
             )
     except KeyError:
         prev_evidence = None
@@ -547,6 +489,106 @@ def spark_logs_check(
     score = 1.0 if len(res["warnings"]) == 0 else 0.0
 
     return {"evidence": res["evidence"], "warnings": res["warnings"], "score": score}
+
+
+def lineage_check():
+    # from airflow.models import TaskInstance
+    # from airflow.operators.python import get_current_context
+
+    # ti: TaskInstance = get_current_context()["ti"]
+
+    # TODO
+
+    return {"evidence": {}, "warnings": [], "score": 1.0}
+
+
+def hdfs_file_permission_check(
+    path: str,
+    owner: Optional[str] = None,
+    group: Optional[str] = None,
+    expected_permissions: Optional[int] = None,
+):
+    res = get_hdfs_file_permissions(path)
+    assert len(res) == 1
+    res = res[0]
+    warnings = []
+    score = 1.0
+    if owner is not None and res["owner"] != owner:
+        warnings.append(f"Unexpected owner {res['owner']} for {path}")
+        score = 0.0
+    if group is not None and res["group"] != group:
+        warnings.append(f"Unexpected group {res['group']} for {path}")
+        score = 0.0
+    if expected_permissions is not None and res["permissions"] != expected_permissions:
+        score = 1.0
+        warnings = [f"Unexpected permissions {res['permissions']} for {path}"]
+
+    return {"evidence": res, "warnings": warnings, "score": score}
+
+
+def hdfs_file_can_write(
+    path: str, user: Optional[str] = None, group: Optional[str] = None
+):
+    res = get_hdfs_file_permissions(path)
+    perms = res["pad_permissions"]
+    WRITE_OCTALS = "2367"
+
+    if (
+        (user == res["owner"] and perms[-3] in WRITE_OCTALS)
+        or (group == res["group"] and perms[-2] in WRITE_OCTALS)
+        or (perms[-1] in WRITE_OCTALS)
+    ):
+        score = 1.0
+        warnings = []
+    else:
+        score = 0.0
+        warnings = [f"Cannot write to {path}"]
+
+    return {"evidence": res, "warnings": warnings, "score": score}
+
+
+def hdfs_file_can_read(
+    path: str, user: Optional[str] = None, group: Optional[str] = None
+):
+    res = get_hdfs_file_permissions(path)
+    perms = res["pad_permissions"]
+    READ_OCTALS = "4567"
+
+    if (
+        (user == res["owner"] and perms[-3] in READ_OCTALS)
+        or (group == res["group"] and perms[-2] in READ_OCTALS)
+        or (perms[-1] in READ_OCTALS)
+    ):
+        score = 1.0
+        warnings = []
+    else:
+        score = 0.0
+        warnings = [f"Cannot read from {path}"]
+
+    return {"evidence": res, "warnings": warnings, "score": score}
+
+
+def kerberos_auth_check(principal: Optional[str] = None, keytab: Optional[str] = None):
+    import subprocess
+
+    args = ["kinit"]
+    if keytab is not None:
+        args += ["-kt", keytab]
+    if principal is not None:
+        args.append(principal)
+
+    res = subprocess.run(
+        args=args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    warnings = []
+    score = 1.0
+    if res.returncode != 0:
+        warnings.append(res.stdout.decode().strip())
+
+    return {"evidence": res.stdout.decode().strip(), "warnings": [], "score": score}
 
 
 def report_generator(task_ids: Optional[Set[str]] = None):
@@ -591,96 +633,141 @@ with DAG(
     train_set = File("hdfs://localhost:/titanic/train.csv")
 
     with TaskGroup(group_id="pipeline") as p1:
-        train_model_t = PythonOperator(
+        train_model_t = CachingSparkSubmitOperator(
             task_id="train_model",
-            python_callable=pipeline_lib.train_model,
-            op_kwargs={
-                "train_set": train_set,
-                "model_target": "/titanic/model",
-                "results_target": "/titanic/results",
-                "app_name": "spark_classification",
-                "keep_last": '{{"pipeline.train_model" in dag_run.conf.get("keep_last", [])}}',
-            },
+            application="dags/spark_classification.py",
         )
 
     with TaskGroup(group_id="pre-execution-checks") as pre_p1:
-        requirements_check_t = PythonOperator(
-            task_id="requirements_check",
-            python_callable=requirements_check,
-            op_kwargs={
-                "keep_last": '{{"requirements_check" in dag_run.conf.get("keep_last", [])}}',
-            },
-        )
-
-        python_code_check_airflow_t = PythonOperator(
-            task_id="python_code_check_airflow",
-            python_callable=python_code_check,
-            op_kwargs={
-                "file_path": "./dags/airflow_verified_classification.py",
-                "keep_last": '{{"python_code_check_airflow" in dag_run.conf.get("keep_last", [])}}',
-            },
-        )
-
-        python_code_check_spark_t = PythonOperator(
-            task_id="python_code_check_spark",
-            python_callable=python_code_check,
-            op_kwargs={
-                "file_path": "./dags/spark_classification.py",
-                "keep_last": '{{"python_code_check_spark" in dag_run.conf.get("keep_last", [])}}',
-            },
-        )
-
-        hadoop_config_check_encryption_t = PythonOperator(
-            task_id="hadoop_config_check_encryption",
-            python_callable=hadoop_config_check_encryption,
-            op_kwargs={
-                "keep_last": '{{"hadoop_config_check_encryption" in dag_run.conf.get("keep_last", [])}}',
-            },
-        )
-
-        hadoop_config_check_security_t = PythonOperator(
-            task_id="hadoop_config_check_security",
-            python_callable=hadoop_config_check_security,
-            op_kwargs={
-                "keep_last": '{{"hadoop_config_check_security" in dag_run.conf.get("keep_last", [])}}',
-            },
-        )
-
-        spark_config_check_t = PythonOperator(
-            task_id="spark_config_check",
-            python_callable=spark_config_check,
-            op_kwargs={
-                "keep_last": '{{"spark_config_check" in dag_run.conf.get("keep_last", [])}}',
-            },
-        )
-
-        airflow_config_check_t = PythonOperator(
-            task_id="airflow_config_check",
-            python_callable=airflow_config_check,
-            op_kwargs={
-                "keep_last": '{{"airflow_config_check" in dag_run.conf.get("keep_last", [])}}',
-            },
-        )
-
-        hdfs_paths_check_t = PythonOperator(
+        # p2
+        hdfs_paths_check_t = CachingPythonOperator(
             task_id="hdfs_paths_check",
             python_callable=hdfs_paths_check,
             op_kwargs={
                 "target_task_id": train_model_t.task_id,
-                "spark_file_path": "./dags/spark_classification.py",
+                "spark_file_path": "dags/spark_classification.py",
                 "expected_paths_re": [r"hdfs://localhost.+"],
-                "keep_last": '{{"hdfs_paths_check" in dag_run.conf.get("keep_last", [])}}',
             },
         )
 
+        # p3
+        task_args_check_t = CachingPythonOperator(
+            task_id="task_args_check",
+            python_callable=task_args_check,
+            op_kwargs={
+                "target_task_id": train_model_t.task_id,
+                "expected_args": {
+                    "application": "dags/spark_classification.py",
+                    "args": None,
+                },
+            },
+        )
+
+        # p4
+        lineage_check_t = CachingPythonOperator(
+            task_id="lineage_check",
+            python_callable=lineage_check,
+        )
+
+        # p5
+        python_code_check_spark_t = CachingPythonOperator(
+            task_id="python_code_check_spark",
+            python_callable=python_code_check,
+            op_kwargs={"file_path": "./dags/spark_classification.py"},
+        )
+
+        # p6
+        requirements_check_t = CachingPythonOperator(
+            task_id="requirements_check",
+            python_callable=requirements_check,
+        )
+
+        # p7
+        # TODO check sul dag
+
+        # p8
+        read_permission_check_t = CachingPythonOperator(
+            task_id="read_permission_check",
+            python_callable=hdfs_file_can_read,
+            op_kwargs={
+                "path": "/titanic/train.csv",
+                "user": "bertof",
+                "group": "hadoop",
+            },
+        )
+
+        # p9
+        write_permission_check_t = CachingPythonOperator(
+            task_id="write_permission_check",
+            python_callable=hdfs_file_can_write,
+            op_kwargs={
+                "path": "/titanic",
+                "user": "bertof",
+                "group": "hadoop",
+            },
+        )
+
+        # p10
+        hadoop_config_check_encryption_t = CachingPythonOperator(
+            task_id="hadoop_config_check_encryption",
+            python_callable=hadoop_config_check_encryption,
+        )
+
+        # p11
+        hadoop_config_check_security_t = CachingPythonOperator(
+            task_id="hadoop_config_check_security",
+            python_callable=hadoop_config_check_security,
+        )
+
+        # p12
+        spark_config_check_t = CachingPythonOperator(
+            task_id="spark_config_check",
+            python_callable=spark_config_check,
+        )
+
+        # p13
+        airflow_config_check_t = CachingPythonOperator(
+            task_id="airflow_config_check",
+            python_callable=airflow_config_check,
+        )
+
+        # p14
+        kerberos_auth_check_t = CachingPythonOperator(
+            task_id="kerberos_auth_check",
+            python_callable=kerberos_auth_check,
+            op_kwargs={
+                "principal": "bertof/my.engine",
+                "keytab": "eng.keytab",
+            },
+        )
+
+        # p15
+        acl_config_check = CachingPythonOperator(
+            task_id="acl_config_check",
+            python_callable=acl_config_check,
+            op_kwargs={
+                "expected_acl": {},
+            },
+        )
+
+        # p17
+        python_code_check_airflow_t = CachingPythonOperator(
+            task_id="python_code_check_airflow",
+            python_callable=python_code_check,
+            op_kwargs={"file_path": "./dags/airflow_verified_classification.py"},
+        )
+
+        pass
+
     with TaskGroup(group_id="post-execution-checks") as post_p1:
-        spark_logs_check_t = PythonOperator(
+        # p1
+        spark_logs_check_t = CachingPythonOperator(
             task_id="spark_logs_check",
             python_callable=spark_logs_check,
             retry_delay=timedelta(seconds=5),
             retries=2,
             op_kwargs={
-                "target_task_id": train_model_t.task_id,
+                "target_app_name": "spark_classification",
                 "expected_jobs": {
                     "collect at AreaUnderCurve",
                     "collect at BinaryClassificationMetrics",
@@ -693,12 +780,15 @@ with DAG(
                     "treeAggregate at RDDLossFunction",
                     "treeAggregate at Summarizer",
                 },
-                "keep_last": '{{"spark_logs_check" in dag_run.conf.get("keep_last", [])}}',
+                "master": "yarn",
             },
         )
 
+        # p16
+        # TODO: Monitoring probe su ranger
+
     with TaskGroup(group_id="assurance-report") as ass_p1:
-        report_generator_t = PythonOperator(
+        report_generator_t = CachingPythonOperator(
             task_id="report_generator", python_callable=report_generator
         )
 

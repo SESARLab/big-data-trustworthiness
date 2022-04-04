@@ -150,17 +150,14 @@ def get_hdfs_file_permissions(path: str, ss: Optional[SparkSession] = None):
     if ss is None:
         ss = SparkSession.builder.appName("permission_checker").getOrCreate()
     fs = ss._jvm.org.apache.hadoop.fs.FileSystem.get(ss._jsc.hadoopConfiguration())
-    list_status = fs.listStatus(ss._jvm.org.apache.hadoop.fs.Path(path))
-    return [
-        {
-            "file": file.getPath().getName(),
-            "owner": file.getOwner(),
-            "group": file.getGroup(),
-            "permissions": file.getPermission().toOctal(),
-            "pad_permissions": f"{file.getPermission().toOctal():04}",
-        }
-        for file in list_status
-    ]
+    file = fs.getFileStatus(ss._jvm.org.apache.hadoop.fs.Path(path))
+    return {
+        "file": file.getPath().getName(),
+        "owner": file.getOwner(),
+        "group": file.getGroup(),
+        "permissions": file.getPermission().toOctal(),
+        "pad_permissions": f"{file.getPermission().toOctal():04}",
+    }
 
 
 def python_task_source_extractor(

@@ -206,8 +206,6 @@ def spark_config_analysis(config):
 
 
 def airflow_config_analysis(config):
-    from pprint import pprint
-
     warnings = []
     scores = []
 
@@ -295,10 +293,6 @@ def requirements_check():
 
 
 def python_code_check(file_path: str):
-    from airflow.operators.python import get_current_context
-
-    ti = get_current_context()["ti"]
-
     with open(file=file_path) as f:
         source_code = list(f.readlines())
     res = python_code_analysis(source=source_code)
@@ -536,8 +530,6 @@ def hdfs_file_can_write(
     path: str, user: Optional[str] = None, group: Optional[str] = None
 ):
     res = get_hdfs_file_permissions(path)
-    assert len(res) == 1
-    res = res[0]
     perms = res["pad_permissions"]
     WRITE_OCTALS = "2367"
 
@@ -559,8 +551,6 @@ def hdfs_file_can_read(
     path: str, user: Optional[str] = None, group: Optional[str] = None
 ):
     res = get_hdfs_file_permissions(path)
-    assert len(res) == 1
-    res = res[0]
     perms = res["pad_permissions"]
     READ_OCTALS = "4567"
 
@@ -576,6 +566,29 @@ def hdfs_file_can_read(
         warnings = [f"Cannot read from {path}"]
 
     return {"evidence": res, "warnings": warnings, "score": score}
+
+
+def kerberos_auth_check(principal: Optional[str] = None, keytab: Optional[str] = None):
+    import subprocess
+
+    args = ["kinit"]
+    if keytab is not None:
+        args += ["-kt", keytab]
+    if principal is not None:
+        args.append(principal)
+
+    res = subprocess.run(
+        args=args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    warnings = []
+    score = 1.0
+    if res.returncode != 0:
+        warnings.append(res.stdout.decode().strip())
+
+    return {"evidence": res.stdout.decode().strip(), "warnings": [], "score": score}
 
 
 def report_generator(task_ids: Optional[Set[str]] = None):
@@ -620,17 +633,6 @@ with DAG(
     train_set = File("hdfs://localhost:/titanic/train.csv")
 
     with TaskGroup(group_id="pipeline") as p1:
-        # train_model_t = PythonOperator(
-        #     task_id="train_model",
-        #     python_callable=pipeline_lib.train_model,
-        #     op_kwargs={
-        #         "train_set": train_set,
-        #         "model_target": "/titanic/model",
-        #         "results_target": "/titanic/results",
-        #         "app_name": "spark_classification",
-        #         "keep_last": '{{"pipeline.train_model" in dag_run.conf.get("keep_last", [])}}',
-        #     },
-        # )
         train_model_t = CachingSparkSubmitOperator(
             task_id="train_model",
             application="dags/spark_classification.py",
@@ -688,6 +690,7 @@ with DAG(
             task_id="read_permission_check",
             python_callable=hdfs_file_can_read,
             op_kwargs={
+                "path": "/titanic/train.csv",
                 "user": "bertof",
                 "group": "hadoop",
             },
@@ -698,6 +701,7 @@ with DAG(
             task_id="write_permission_check",
             python_callable=hdfs_file_can_write,
             op_kwargs={
+                "path": "/titanic",
                 "user": "bertof",
                 "group": "hadoop",
             },
@@ -728,7 +732,14 @@ with DAG(
         )
 
         # p14
-        # TODO: test su kerveros
+        kerberos_auth_check_t = CachingPythonOperator(
+            task_id="kerberos_auth_check",
+            python_callable=kerberos_auth_check,
+            op_kwargs={
+                "principal": "bertof/my.engine",
+                "keytab": "eng.keytab",
+            },
+        )
 
         # p15
         acl_config_check = CachingPythonOperator(

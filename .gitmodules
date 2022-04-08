@@ -1,0 +1,3 @@
+[submodule "openvas"]
+	path = openvas
+	url = git@repository.v2.moon-cloud.eu:probes/openvas.git

@@ -1,5 +1,6 @@
 apache-airflow
 apache-airflow-providers-apache-spark
+apache-airflow-providers-docker
 
 openlineage-airflow
 

@@ -1,6 +1,7 @@
 from airflow.models import TaskInstance, DagRun
 from airflow.operators.python_operator import PythonOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.providers.docker.operators.docker import DockerOperator
 from openlineage.airflow.dag import DAG
 from pyspark.sql import SparkSession
 from typing import Optional, List, Any
@@ -45,6 +46,24 @@ class CachingSparkSubmitOperator(SparkSubmitOperator):
                 print("No previous results found...")
 
         return {"res": super().execute(context=context)}
+
+
+class CachingDockerOperator(DockerOperator):
+    from airflow.utils.context import Context
+
+    def execute(self, context: Context):
+        dag_run: DagRun = context["dag_run"]
+        keep_last = dag_run.conf.get("keep_last", [])
+
+        if self.task_id in keep_last:
+            print("Using last results...")
+            prev_res = load_prev_results(context["ti"], self.task_id)
+            if prev_res is not None:
+                return prev_res
+            else:
+                print("No previous results found...")
+
+        return super().execute(context=context)
 
 
 #

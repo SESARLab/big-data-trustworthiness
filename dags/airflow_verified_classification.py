@@ -6,6 +6,7 @@ from typing import List, Set, Optional, Any, Dict
 from pipeline_lib import (
     CachingPythonOperator,
     CachingSparkSubmitOperator,
+    CachingDockerOperator,
     cve_to_score,
     load_prev_results,
     python_code_analysis,
@@ -14,6 +15,7 @@ from pipeline_lib import (
     task_args_extractor,
     get_hdfs_file_permissions,
 )
+from airflow.providers.docker.operators.docker import DockerOperator
 
 default_args = {
     "owner": "airflow",
@@ -587,8 +589,77 @@ def kerberos_auth_check(principal: Optional[str] = None, keytab: Optional[str] =
     score = 1.0
     if res.returncode != 0:
         warnings.append(res.stdout.decode().strip())
+        score = 0.0
 
-    return {"evidence": res.stdout.decode().strip(), "warnings": [], "score": score}
+    return {
+        "evidence": res.stdout.decode().strip(),
+        "warnings": warnings,
+        "score": score,
+    }
+
+
+def openvas_check(
+    config: Dict[str, Any], environment: Dict[str, str] = {}, timeout: float = 600.0
+):
+    import subprocess
+    from subprocess import TimeoutExpired, STDOUT, PIPE, Popen
+    import pty
+    import json
+    import shlex
+
+    args = ["docker", "run", "--rm", "-i", "--pull=missing"]
+    for k, v in environment.items():
+        args += ["-e", f"{k}={v}"]
+    args += ["repository.v2.moon-cloud.eu:4567/probes/openvas"]
+    args = " ".join(args)
+    print("args:", args)
+
+    in_data = json.dumps(config) + "\n"
+    print("in_data:", in_data)
+
+    p = Popen(
+        args=args,
+        stdin=PIPE,
+        stdout=PIPE,
+        stderr=PIPE,
+        text=True,
+        shell=True,
+    )
+
+    try:
+        out, err = p.communicate(input=in_data, timeout=timeout)
+    except TimeoutExpired:
+        p.kill()
+        out, err = p.communicate()
+
+    out = out.strip()
+    err = err.strip()
+
+    print("OUT:", out)
+    print("ERR:", err)
+
+    if p.returncode != 0:
+        evidence = {"out": out, "err": err}
+        warnings = {"returncode": p.returncode}
+        score = 0.0
+    else:
+        evidence = json.loads(out.split("\n")[-1])
+        evidence.update(json.loads("\n".join(out.split("\n")[1:-1])))
+        warnings = [(host, data) for host, data in evidence.get("data", {}).items()]
+        score = 1.0 - max(
+            [
+                desc.get("cvss", 10.0) * 0.1
+                for host, data in evidence.get("data", {}).items()
+                for id, desc in data.get("vulnerabilities", {}).items()
+            ]
+            + [0.0]
+        )
+
+    return {
+        "evidence": evidence,
+        "warnings": warnings,
+        "score": score,
+    }
 
 
 def report_generator(task_ids: Optional[Set[str]] = None):
@@ -751,10 +822,13 @@ with DAG(
         )
 
         # p17
-        python_code_check_airflow_t = CachingPythonOperator(
-            task_id="python_code_check_airflow",
-            python_callable=python_code_check,
-            op_kwargs={"file_path": "./dags/airflow_verified_classification.py"},
+        openvas_check_t = CachingPythonOperator(
+            task_id="openvas_check",
+            python_callable=openvas_check,
+            op_kwargs={
+                "environment": {"OPENVAS_HOST": "172.20.28.178"},
+                "config": {"config": {"host": "172.20.28.200"}},
+            },
         )
 
         pass

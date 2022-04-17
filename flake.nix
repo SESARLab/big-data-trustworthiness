@@ -43,8 +43,9 @@
         HADOOP_HOME = "${pkgs.hadoop}/lib/${pkgs.hadoop.untarDir}";
         SPARK_HOME = "${pkgs.spark}/lib/${pkgs.spark.untarDir}";
         OPENLINEAGE_URL = "http://localhost:5000";
-        HADOOP_CONF_DIR = "/nix/store/i29h9l4qq8rrbcb2011cigqwj6ggb5id-hadoop-conf";
-        SPARK_CONF_DIR = "/nix/store/f1cd0cpgwg8236bk1y6r7zmmxs53k9cw-spark-conf";
+        HADOOP_CONF_DIR = "/etc/hadoop-conf/";
+        SPARK_CONF_DIR = "/nix/store/1rd5797c349jfrqywh0k7n3lp152n2w9-spark-conf";
+        # PYSPARK_PYTHON = "./venv/bin/python3";
         # SPARK_LOG_DIR = "/var/log/spark";
         # SPARK_MASTER_HOST = "127.0.0.1";
 
@@ -62,6 +63,8 @@
           unset SOURCE_DATE_EPOCH
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/:${pkgs.stdenv.cc.cc.lib}/lib
           export AIRFLOW_HOME=`pwd`
+          export PYSPARK_PYTHON=`pwd`/venv/bin/python3
+          export PYTHONPATH=`pwd`/venv/lib/python3.9/site-packages:$PYTHONPATH
         '';
       };
     });

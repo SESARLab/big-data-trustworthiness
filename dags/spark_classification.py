@@ -110,10 +110,10 @@ if __name__ == "__main__":
         .getOrCreate()
     )
 
-    train_set_url = "hdfs://localhost:/titanic/train.csv"
-    test_set_url = "hdfs://localhost:/titanic/test.csv"
-    model_target_url = "hdfs://localhost:/titanic/model"
-    results_target_url = "hdfs://localhost:/titanic/results"
+    train_set_url = "titanic/train.csv"
+    test_set_url = "titanic/test.csv"
+    model_target_url = "titanic/model"
+    results_target_url = "titanic/results"
 
     train_set = spark.read.csv(train_set_url, header=True, inferSchema=True)
     test_set = spark.read.csv(test_set_url, header=True, inferSchema=True)

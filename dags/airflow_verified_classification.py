@@ -701,7 +701,7 @@ with DAG(
     tags=["big-data assurance"],
 ) as dag:
     # Data from https://www.kaggle.com/c/titanic/
-    train_set = File("hdfs://localhost:/titanic/train.csv")
+    train_set = File("titanic/train.csv")
 
     with TaskGroup(group_id="pipeline") as p1:
         train_model_t = CachingSparkSubmitOperator(

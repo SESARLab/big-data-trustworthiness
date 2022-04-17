@@ -71,6 +71,18 @@ class CachingDockerOperator(DockerOperator):
 #
 
 
+def train_kmeans(
+    train_set,
+    model_target,
+    resuts_target,
+    app_name="spark_kmeans",
+    master="local",
+    ss: Optional[SparkSession] = None,
+    keep_last=False,
+):
+    pass
+
+
 def train_model(
     train_set,
     model_target,

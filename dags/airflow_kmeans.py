@@ -1,5 +1,4 @@
 from datetime import timedelta, datetime
-from airflow.lineage.entities import File
 from airflow.utils.task_group import TaskGroup
 from openlineage.airflow.dag import DAG
 from pipeline_lib import CachingSparkSubmitOperator
@@ -29,18 +28,15 @@ default_args = {
 
 
 with DAG(
-    "classification_pipeline",
+    "kmeans_pipeline",
     default_args=default_args,
-    description="Correct implementation of the classification model",
+    description="Correct implementation of the kmeans pipeline",
     schedule_interval=None,
     start_date=datetime(2022, 1, 1),
     tags=["big-data assurance"],
 ) as dag:
-    # Data from https://www.kaggle.com/c/titanic/data?select=train.csv
-    train_set = File("titanic/train.csv")
-
     with TaskGroup(group_id="pipeline") as p1:
         train_model_t = CachingSparkSubmitOperator(
             task_id="train_model",
-            application="dags/spark_classification.py",
+            application="dags/spark_kmeans.py",
         )

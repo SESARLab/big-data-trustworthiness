@@ -1,4 +1,4 @@
-def train_model(train_set):
+def train_classifier(train_set):
     from pprint import pformat
     from pyspark.ml.classification import LinearSVC
     from pyspark.ml.evaluation import BinaryClassificationEvaluator
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     train_set = spark.read.csv(train_set_url, header=True, inferSchema=True)
     test_set = spark.read.csv(test_set_url, header=True, inferSchema=True)
 
-    model = train_model(train_set=train_set)
+    model = train_classifier(train_set=train_set)
     model.write().overwrite().save(model_target_url)
 
     data = spark.createDataFrame(

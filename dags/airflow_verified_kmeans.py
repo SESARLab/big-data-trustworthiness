@@ -4,25 +4,18 @@ from datetime import timedelta, datetime
 from openlineage.airflow.dag import DAG
 from typing import List, Set, Optional, Any, Dict
 from pipeline_lib import (
-    airflow_config_analysis,
     CachingPythonOperator,
     CachingSparkSubmitOperator,
+    CachingDockerOperator,
     cve_to_score,
-    get_hdfs_file_permissions,
-    hdfs_config_analysis_encryption,
-    hdfs_config_analysis_security,
-    hdfs_paths_probe,
     load_prev_results,
-    operator_args_extractor,
     python_code_analysis,
     pyupio_to_cve,
-    requirements_analysis, hdfs_config_probe,
-    spark_config_analysis,
-    spark_config_probe,
-    spark_logs_analysis,
-    spark_logs_probe,
     spark_submit_task_source_extractor,
+    operator_args_extractor,
+    get_hdfs_file_permissions,
 )
+from airflow.providers.docker.operators.docker import DockerOperator
 
 default_args = {
     "owner": "airflow",
@@ -46,6 +39,229 @@ default_args = {
     # 'sla_miss_callback': yet_another_function,
     # 'trigger_rule': 'all_success',
 }
+
+#
+# Probes and analysis
+#
+
+
+def requirements_analysis(requirements: Optional[List[str]]):
+    """
+    Given a list of requirements, returns a list of known vulnerabilities
+    """
+    from tempfile import NamedTemporaryFile
+    import json
+    import subprocess
+
+    if requirements is not None:
+        print("Evaluating requirements...")
+        with NamedTemporaryFile(mode="w") as temp_f:
+            temp_f.writelines(requirements)
+            temp_f.flush()
+
+            data = (
+                subprocess.run(
+                    ["safety", "check", "--json", "-r", temp_f.name],
+                    stdout=subprocess.PIPE,
+                    check=False,
+                )
+                .stdout.decode()
+                .strip()
+            )
+    else:
+        print("Evaluating installed libraries...")
+        data = (
+            subprocess.run(
+                ["safety", "check", "--json"],
+                stdout=subprocess.PIPE,
+                check=False,
+            )
+            .stdout.decode()
+            .strip()
+        )
+
+    res = json.loads(data)
+
+    return {"evidence": requirements, "warnings": res}
+
+
+def spark_logs_probe(
+    target_app_name: str,
+    spark_history_api: str = "http://localhost:18080/api/v1",
+):
+    """
+    Extracts logs information of a spark application and returns it as a
+    dictionary
+    """
+    import requests
+
+    applications = requests.get(f"{spark_history_api}/applications").json()
+
+    try:
+        app = next(filter(lambda e: (e.get("name") == target_app_name), applications))
+    except StopIteration as e:
+        print(f"No {target_app_name} attempt found")
+        raise e
+
+    base_path = f"{spark_history_api}/applications/{app['id']}"
+
+    return {
+        "allexecutors": requests.get(f"{base_path}/allexecutors").json(),
+        "jobs": requests.get(f"{base_path}/jobs").json(),
+        "environment": requests.get(f"{base_path}/environment").json(),
+    }
+
+
+def spark_log_analysis(evidence, expected_jobs: Set[str] = set(), prev_evidence=None):
+    warnings = []
+    new_jobs = {job["name"].split(".scala")[0] for job in evidence["jobs"]}
+    for job in new_jobs:
+        if job not in expected_jobs:
+            warnings.append(f"Unexpected job {job}")
+
+    if prev_evidence is not None:
+        old_jobs = {job["name"].split(".scala")[0] for job in prev_evidence["jobs"]}
+        for job in new_jobs:
+            if job not in old_jobs:
+                warnings.append(f"New job {job} not present in previous logs")
+
+    return {"evidence": evidence, "warnings": warnings}
+
+
+def hdfs_config_probe(hdfs_api: str = "http://localhost:9870"):
+    """
+    Extracts configuration information of a Hadoop cluster and returns it as a
+    dictionary
+    """
+    import requests
+    from xml.etree import ElementTree
+
+    content = requests.get(f"{hdfs_api}/conf").content
+    root_xml = ElementTree.fromstring(content)
+
+    return {
+        e.find("name").text: e.find("value").text for e in root_xml.findall("property")
+    }
+
+
+def hdfs_config_analysis_encryption(config):
+    """
+    Analyzes an Hadoop cluster configuration
+    """
+    warnings = []
+    scores = []
+    if config.get("dfs.encrypt.data.transfer", "false") == "false":
+        warnings.append("In-transit data encryption is disabled")
+        scores.append(0.1)
+    if config.get("yarn.intermediate-data-encryption.enable", "false") == "false":
+        warnings.append("Intermediate data encryption is disabled")
+        scores.append(0.1)
+
+    return {"evidence": config, "warnings": warnings, "scores": scores}
+
+
+def hdfs_config_analysis_security(config):
+    """
+    Analyzes an Hadoop cluster configuration
+    """
+    warnings = []
+    scores = []
+    if config.get("dfs.permissions.enabled", "false") == "false":
+        warnings.append("FS access control is disabled")
+        scores.append(0.1)
+    if config.get("dfs.permissions.superusergroup", "supergroup") == "supergroup":
+        warnings.append("Task is running with default unrestricted permissions")
+        scores.append(0.5)
+    if config.get("hadoop.registry.secure", "false") == "false":
+        warnings.append("Registry security is not enabled")
+        scores.append(0.5)
+    if config.get("hadoop.security.authorization", "false") == "false":
+        warnings.append("Authentication is disabled")
+        scores.append(0.1)
+
+    return {"evidence": config, "warnings": warnings, "scores": scores}
+
+
+def spark_config_probe(master: str = "spark://localhost:7077"):
+    """
+    Extracts configuration information of a Spark cluster and returns it as a
+    dictionary
+    """
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.appName("conf-checker").master(master).getOrCreate()
+    return dict(spark.sparkContext.getConf().getAll())
+
+
+def spark_config_analysis(config):
+    warnings = []
+    scores = []
+
+    if config.get("spark.network.crypto.enabled", "false") == "false":
+        warnings.append("Network encryption is disabled")
+        scores.append(0.1)
+    if config.get("spark.io.encryption.enable", "false") == "false":
+        warnings.append("IO encryption is disabled")
+        scores.append(0.1)
+
+    return {"evidence": config, "warnings": warnings, "scores": scores}
+
+
+def airflow_config_analysis(config):
+    warnings = []
+    scores = []
+
+    if config.get("core", {}).get("spark.network.crypto.enabled", "") == "":
+        warnings.append("Fernet key is not set")
+        scores.append(0.1)
+    if config.get("kubernetes", {}).get("verify_ssl", "False") == "False":
+        warnings.append("SSL cert. check is disabled")
+        scores.append(0.1)
+
+    return {"evidence": config, "warnings": warnings, "scores": scores}
+
+
+def hdfs_paths_probe(source_code: str) -> List[str]:
+    assert isinstance(source_code, str)
+
+    def file_path_heuristic(h_source_code: str) -> List[str]:
+
+        from itertools import chain
+        import re
+
+        r1 = r'["\']\s*(\w+:(\/?\/?)[^\s]+)\s*["\']'  # well formatted uri
+        r2 = r'["\']\s*(.+/.+)\s*["\']'  # any string with a slash
+
+        iterator = chain(re.finditer(r1, h_source_code), re.finditer(r2, h_source_code))
+
+        return list(set(s.group(1).strip() for s in iterator))
+
+    def url_map(maybe_path: str) -> Optional[str]:
+
+        from urllib.parse import urlparse
+
+        try:
+            parsed_url = urlparse(maybe_path)
+            if parsed_url.scheme is None:
+                parsed_url.scheme = "hdfs"
+            if parsed_url.netloc is None:
+                parsed_url.netloc = "localhost"
+
+            return parsed_url.geturl()
+
+        except ValueError:
+            return None
+
+    return list(
+        filter(
+            lambda p: p is not None,
+            map(
+                url_map,
+                file_path_heuristic(h_source_code=source_code),
+            ),
+        )
+    )
+
 
 #
 # Airflow task definitions
@@ -179,8 +395,7 @@ def task_args_check(
     from airflow.operators.python import get_current_context
     from pprint import pprint
 
-    args = operator_args_extractor(dag=get_current_context()[
-                                   "dag"], task_id=target_task_id)
+    args = operator_args_extractor(dag=get_current_context()["dag"], task_id=target_task_id)
 
     print("FOUND ARGS:")
     pprint(args)
@@ -215,8 +430,7 @@ def hdfs_paths_check(
         dag=context["dag"], task_id=target_task_id
     )
 
-    airflow_source = [airflow_task["source"]] + \
-        list(map(str, airflow_task["args"]))
+    airflow_source = [airflow_task["source"]] + list(map(str, airflow_task["args"]))
 
     with open(spark_file_path) as r:
         spark_source = [r.read()]
@@ -270,7 +484,7 @@ def spark_logs_check(
     except KeyError:
         prev_evidence = None
 
-    res = spark_logs_analysis(
+    res = spark_log_analysis(
         evidence=evidence, expected_jobs=expected_jobs, prev_evidence=prev_evidence
     )
 
@@ -387,8 +601,11 @@ def kerberos_auth_check(principal: Optional[str] = None, keytab: Optional[str] =
 def openvas_check(
     config: Dict[str, Any], environment: Dict[str, str] = {}, timeout: float = 600.0
 ):
-    from subprocess import TimeoutExpired,  PIPE, Popen
+    import subprocess
+    from subprocess import TimeoutExpired, STDOUT, PIPE, Popen
+    import pty
     import json
+    import shlex
 
     args = ["docker", "run", "--rm", "-i", "--pull=missing"]
     for k, v in environment.items():
@@ -428,8 +645,7 @@ def openvas_check(
     else:
         evidence = json.loads(out.split("\n")[-1])
         evidence.update(json.loads("\n".join(out.split("\n")[1:-1])))
-        warnings = [(host, data)
-                    for host, data in evidence.get("data", {}).items()]
+        warnings = [(host, data) for host, data in evidence.get("data", {}).items()]
         score = 1.0 - max(
             [
                 desc.get("cvss", 10.0) * 0.1
@@ -461,8 +677,7 @@ def report_generator(task_ids: Optional[Set[str]] = None):
         task_id: res for task_id, res in zip(task_ids, ti.xcom_pull(task_ids=task_ids))
     }
 
-    task_scores = {task_id: res.get("score")
-                   for task_id, res in prev_results.items()}
+    task_scores = {task_id: res.get("score") for task_id, res in prev_results.items()}
     task_warnings = {
         task_id: res.get("warnings") for task_id, res in prev_results.items()
     }

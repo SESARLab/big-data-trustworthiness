@@ -1,17 +1,17 @@
-apache-airflow
-apache-airflow-providers-apache-spark
-apache-airflow-providers-docker
+apache-airflow==2.2.4
+apache-airflow-providers-apache-spark==2.1.0
+apache-airflow-providers-docker==2.6.0
 
-openlineage-airflow
+openlineage-airflow==0.5.2
 
-pylint
-pyspark
-numpy # optional dependency of pyspark
-safety
+pylint==2.13.3
+pyspark==3.2.1
+numpy==1.22.3 # optional dependency of pyspark
+safety==1.10.3
 
-scikit-learn # digits dataset
-pandas
+scikit-learn==1.0.2 # digits dataset
+pandas==1.4.2
 
 markupsafe==2.0.1 # workaround https://github.com/pallets/markupsafe/issues/284
 
-ipython
+ipython==8.2.0

@@ -20,7 +20,7 @@
         buildInputs = with pkgs; [
           # A Python interpreter including the 'venv' module is required to bootstrap
           # the environment.
-          pythonPackages.python
+          pythonFull
 
           # This execute some shell code to initialize a venv in $venvDir before
           # dropping into the shell
@@ -30,6 +30,8 @@
           # add them to PYTHONPATH and thus make them accessible from within the venv.
           pythonPackages.virtualenv
           # pythonPackages.ipython
+          (pythonPackages.matplotlib.override { enableQt = true; enableTk = true; })
+
 
           # pythonPackages.numpy
           # pythonPackages.pyspark
@@ -44,7 +46,7 @@
         SPARK_HOME = "${pkgs.spark}/lib/${pkgs.spark.untarDir}";
         OPENLINEAGE_URL = "http://localhost:5000";
         HADOOP_CONF_DIR = "/etc/hadoop-conf/";
-        SPARK_CONF_DIR = "/nix/store/1rd5797c349jfrqywh0k7n3lp152n2w9-spark-conf";
+        SPARK_CONF_DIR = "/nix/store/0xxwyn6sa9vw7xsl3m1bv7z138qg899p-spark-conf";
         # PYSPARK_PYTHON = "./venv/bin/python3";
         # SPARK_LOG_DIR = "/var/log/spark";
         # SPARK_MASTER_HOST = "127.0.0.1";

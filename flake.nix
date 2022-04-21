@@ -29,8 +29,10 @@
           # Those are dependencies that we would like to use from nixpkgs, which will
           # add them to PYTHONPATH and thus make them accessible from within the venv.
           pythonPackages.virtualenv
-          # pythonPackages.ipython
-          (pythonPackages.matplotlib.override { enableQt = true; enableTk = true; })
+          pythonPackages.ipython
+          (pythonPackages.matplotlib.override { enableTk = true; })
+          pythonPackages.pandas
+          pythonPackages.seaborn
 
 
           # pythonPackages.numpy

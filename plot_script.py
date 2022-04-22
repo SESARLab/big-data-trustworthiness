@@ -6,7 +6,7 @@ from itertools import cycle
 
 sns.set_theme("paper")
 sns.set_style("whitegrid")
-hatches = ["////", "\\\\\\\\", "...", "||||"]
+hatches = ["////", "\\\\\\\\", "...", "||||", "xx"]
 colormap = sns.light_palette("gray", as_cmap=True, reverse=True)
 
 dfr = pd.read_csv("data.csv")

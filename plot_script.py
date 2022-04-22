@@ -13,7 +13,7 @@ dfr = pd.read_csv("data.csv")
 
 dfk = dfr.loc[dfr["dag_id"] == "verified_kmeans_pipeline"]
 
-scenarios = ['IC', 'NC', 'CC', 'PC', 'EC']
+scenarios = ['CC', 'PC', 'EC', 'IC', 'NC']
 
 dfm = dfk[["Probe type"]].fillna("Pipeline") \
     .join(dfk[scenarios].astype(float).mul(dfk["Execution time (s)"], axis=0))\

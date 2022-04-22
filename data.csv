@@ -1,35 +1,35 @@
-,dag_id,task_id,Probe type,Execution time (s),CC,PC,EC,IC,Task type
-0,verified_kmeans_pipeline,pipeline.train_model,,53.836063,True,True,True,True,Pipeline
-1,verified_kmeans_pipeline,pre-execution-checks.hdfs_paths_check,Task probe,0.106011,False,True,False,True,Code inspection
-2,verified_kmeans_pipeline,pre-execution-checks.task_args_check,Pipeline probe,0.128332,True,True,False,True,Parameters check
-3,verified_kmeans_pipeline,pre-execution-checks.lineage_check,Task probe,0.113291,True,True,False,True,Lineage
-4,verified_kmeans_pipeline,pre-execution-checks.python_code_check_spark,Task probe,3.843249,True,True,False,True,Code vulnerability check
-5,verified_kmeans_pipeline,pre-execution-checks.requirements_check,Task probe,0.341164,True,True,False,True,Dependency check
-6,verified_kmeans_pipeline,pre-execution-checks.read_permission_check,General purpose probe,2.591453,False,False,True,True,Testing
-7,verified_kmeans_pipeline,pre-execution-checks.write_permission_check,General purpose probe,2.946629,False,False,True,True,Testing
-8,verified_kmeans_pipeline,pre-execution-checks.hadoop_config_check_encryption,Service probe,0.122852,False,False,True,True,Configuration check
-9,verified_kmeans_pipeline,pre-execution-checks.hadoop_config_check_security,Service probe,0.124449,False,False,True,True,Configuration check
-10,verified_kmeans_pipeline,pre-execution-checks.spark_config_check,Service probe,3.296634,False,False,True,True,Configuration check
-11,verified_kmeans_pipeline,pre-execution-checks.airflow_config_check,Service probe,0.106941,False,False,True,True,Configuration check
-12,verified_kmeans_pipeline,pre-execution-checks.kerberos_auth_check,General purpose probe,0.145625,True,False,True,True,Configuration check
-13,verified_kmeans_pipeline,pre-execution-checks.acl_config_check,General purpose probe,0.105462,True,False,True,True,Testing
-14,verified_kmeans_pipeline,pre-execution-checks.openvas_check,Service probe,183.271337,False,False,False,False,Vulnerability check
-15,verified_kmeans_pipeline,post-execution-checks.spark_logs_check,Task probe,0.890754,False,True,False,True,Lineage
-16,verified_kmeans_pipeline,assurance-report.report_generator,,0.109732,True,True,True,True,Report
-17,verified_classification_pipeline,pipeline.train_model,,108.094225,True,True,True,True,Pipeline
-18,verified_classification_pipeline,pre-execution-checks.hdfs_paths_check,Task probe,0.106617,False,True,False,True,Code inspection
-19,verified_classification_pipeline,pre-execution-checks.task_args_check,Pipeline probe,0.118548,True,True,False,True,Parameters check
-20,verified_classification_pipeline,pre-execution-checks.lineage_check,Task probe,0.104944,True,True,False,True,Lineage
-21,verified_classification_pipeline,pre-execution-checks.python_code_check_spark,Task probe,2.330674,True,True,False,True,Code vulnerability check
-22,verified_classification_pipeline,pre-execution-checks.requirements_check,Task probe,0.336476,True,True,False,True,Dependency check
-23,verified_classification_pipeline,pre-execution-checks.read_permission_check,General purpose probe,3.21564,False,False,True,True,Testing
-24,verified_classification_pipeline,pre-execution-checks.write_permission_check,General purpose probe,3.127643,False,False,True,True,Testing
-25,verified_classification_pipeline,pre-execution-checks.hadoop_config_check_encryption,Service probe,0.14138,False,False,True,True,Configuration check
-26,verified_classification_pipeline,pre-execution-checks.hadoop_config_check_security,Service probe,0.125779,False,False,True,True,Configuration check
-27,verified_classification_pipeline,pre-execution-checks.spark_config_check,Service probe,3.320038,False,False,True,True,Configuration check
-28,verified_classification_pipeline,pre-execution-checks.airflow_config_check,Service probe,0.121394,False,False,True,True,Configuration check
-29,verified_classification_pipeline,pre-execution-checks.kerberos_auth_check,General purpose probe,0.151401,True,False,True,True,Configuration check
-30,verified_classification_pipeline,pre-execution-checks.acl_config_check,General purpose probe,0.109983,True,False,True,True,Testing
-31,verified_classification_pipeline,pre-execution-checks.openvas_check,Service probe,182.860231,False,False,False,False,Vulnerability check
-32,verified_classification_pipeline,post-execution-checks.spark_logs_check,Task probe,15.22615,False,True,False,True,Lineage
-33,verified_classification_pipeline,assurance-report.report_generator,,0.109537,True,True,True,True,Report
+,dag_id,task_id,Probe type,Execution time (s),CC,PC,EC,NC,IC,Task type
+0,verified_kmeans_pipeline,pipeline.train_model,,53.836063,True,True,True,True,True,Pipeline
+1,verified_kmeans_pipeline,pre-execution-checks.hdfs_paths_check,Task probe,0.106011,False,True,False,False,True,Code inspection
+2,verified_kmeans_pipeline,pre-execution-checks.task_args_check,Pipeline probe,0.128332,True,True,False,False,True,Parameters check
+3,verified_kmeans_pipeline,pre-execution-checks.lineage_check,Task probe,0.113291,True,True,False,False,True,Lineage
+4,verified_kmeans_pipeline,pre-execution-checks.python_code_check_spark,Task probe,3.843249,True,True,False,False,True,Code vulnerability check
+5,verified_kmeans_pipeline,pre-execution-checks.requirements_check,Task probe,0.341164,True,True,False,False,True,Dependency check
+6,verified_kmeans_pipeline,pre-execution-checks.read_permission_check,General purpose probe,2.591453,False,False,True,False,True,Testing
+7,verified_kmeans_pipeline,pre-execution-checks.write_permission_check,General purpose probe,2.946629,False,False,True,False,True,Testing
+8,verified_kmeans_pipeline,pre-execution-checks.hadoop_config_check_encryption,Service probe,0.122852,False,False,True,False,True,Configuration check
+9,verified_kmeans_pipeline,pre-execution-checks.hadoop_config_check_security,Service probe,0.124449,False,False,True,False,True,Configuration check
+10,verified_kmeans_pipeline,pre-execution-checks.spark_config_check,Service probe,3.296634,False,False,True,False,True,Configuration check
+11,verified_kmeans_pipeline,pre-execution-checks.airflow_config_check,Service probe,0.106941,False,False,True,False,True,Configuration check
+12,verified_kmeans_pipeline,pre-execution-checks.kerberos_auth_check,General purpose probe,0.145625,True,False,True,False,True,Configuration check
+13,verified_kmeans_pipeline,pre-execution-checks.acl_config_check,General purpose probe,0.105462,True,False,True,False,True,Testing
+14,verified_kmeans_pipeline,pre-execution-checks.openvas_check,Service probe,183.271337,False,False,False,False,False,Vulnerability check
+15,verified_kmeans_pipeline,post-execution-checks.spark_logs_check,Task probe,0.890754,False,True,False,False,True,Lineage
+16,verified_kmeans_pipeline,assurance-report.report_generator,,0.109732,True,True,True,False,True,Report
+17,verified_classification_pipeline,pipeline.train_model,,108.094225,True,True,True,True,True,Pipeline
+18,verified_classification_pipeline,pre-execution-checks.hdfs_paths_check,Task probe,0.106617,False,True,False,False,True,Code inspection
+19,verified_classification_pipeline,pre-execution-checks.task_args_check,Pipeline probe,0.118548,True,True,False,False,True,Parameters check
+20,verified_classification_pipeline,pre-execution-checks.lineage_check,Task probe,0.104944,True,True,False,False,True,Lineage
+21,verified_classification_pipeline,pre-execution-checks.python_code_check_spark,Task probe,2.330674,True,True,False,False,True,Code vulnerability check
+22,verified_classification_pipeline,pre-execution-checks.requirements_check,Task probe,0.336476,True,True,False,False,True,Dependency check
+23,verified_classification_pipeline,pre-execution-checks.read_permission_check,General purpose probe,3.21564,False,False,True,False,True,Testing
+24,verified_classification_pipeline,pre-execution-checks.write_permission_check,General purpose probe,3.127643,False,False,True,False,True,Testing
+25,verified_classification_pipeline,pre-execution-checks.hadoop_config_check_encryption,Service probe,0.14138,False,False,True,False,True,Configuration check
+26,verified_classification_pipeline,pre-execution-checks.hadoop_config_check_security,Service probe,0.125779,False,False,True,False,True,Configuration check
+27,verified_classification_pipeline,pre-execution-checks.spark_config_check,Service probe,3.320038,False,False,True,False,True,Configuration check
+28,verified_classification_pipeline,pre-execution-checks.airflow_config_check,Service probe,0.121394,False,False,True,False,True,Configuration check
+29,verified_classification_pipeline,pre-execution-checks.kerberos_auth_check,General purpose probe,0.151401,True,False,True,False,True,Configuration check
+30,verified_classification_pipeline,pre-execution-checks.acl_config_check,General purpose probe,0.109983,True,False,True,False,True,Testing
+31,verified_classification_pipeline,pre-execution-checks.openvas_check,Service probe,182.860231,False,False,False,False,False,Vulnerability check
+32,verified_classification_pipeline,post-execution-checks.spark_logs_check,Task probe,15.22615,False,True,False,False,True,Lineage
+33,verified_classification_pipeline,assurance-report.report_generator,,0.109537,True,True,True,False,True,Report

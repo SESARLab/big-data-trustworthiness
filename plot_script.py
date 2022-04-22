@@ -13,7 +13,7 @@ dfr = pd.read_csv("data.csv")
 
 dfk = dfr.loc[dfr["dag_id"] == "verified_kmeans_pipeline"]
 
-scenarios = ['CC', 'PC', 'EC', 'IC']
+scenarios = ['IC', 'NC', 'CC', 'PC', 'EC']
 
 dfm = dfk[["Probe type"]].fillna("Pipeline") \
     .join(dfk[scenarios].astype(float).mul(dfk["Execution time (s)"], axis=0))\
@@ -36,4 +36,4 @@ if len(argv) > 1:
     for arg in argv[1:]:
         plt.savefig(arg)
 else:
-    plt.savefig("fig1.png")
+    plt.show()

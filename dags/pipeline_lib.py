@@ -402,7 +402,7 @@ def airflow_config_analysis(config):
     warnings = []
     scores = []
 
-    if config.get("core", {}).get("spark.network.crypto.enabled", "") == "":
+    if config.get("core", {}).get("fernet_key", "") == "":
         warnings.append("Fernet key is not set")
         scores.append(0.1)
     if config.get("kubernetes", {}).get("verify_ssl", "False") == "False":

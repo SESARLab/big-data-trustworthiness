@@ -14,6 +14,8 @@
       pythonPackages = pkgs.${python}.pkgs;
     in
     {
+      packages = pkgs;
+
       devShell = pkgs.mkShell {
         name = "impurePythonEnv";
         venvDir = "./venv";

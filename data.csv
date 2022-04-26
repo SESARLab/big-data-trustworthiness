@@ -2,7 +2,7 @@
 0,verified_kmeans_pipeline,pipeline.train_model,,53.836063,True,True,True,True,True,Pipeline
 1,verified_kmeans_pipeline,pre-execution-checks.hdfs_paths_check,Task probe,0.106011,False,True,False,False,True,Code inspection
 2,verified_kmeans_pipeline,pre-execution-checks.task_args_check,Pipeline probe,0.128332,True,True,False,False,True,Parameters check
-3,verified_kmeans_pipeline,pre-execution-checks.lineage_check,Task probe,0.113291,True,True,False,False,True,Lineage
+3,verified_kmeans_pipeline,pre-execution-checks.network_traffic_check,Task probe,0.113291,True,True,False,False,True,Lineage
 4,verified_kmeans_pipeline,pre-execution-checks.python_code_check_spark,Task probe,3.843249,True,True,False,False,True,Code vulnerability check
 5,verified_kmeans_pipeline,pre-execution-checks.requirements_check,Task probe,0.341164,True,True,False,False,True,Dependency check
 6,verified_kmeans_pipeline,pre-execution-checks.read_permission_check,General purpose probe,2.591453,False,False,True,False,True,Testing
@@ -19,7 +19,7 @@
 17,verified_classification_pipeline,pipeline.train_model,,108.094225,True,True,True,True,True,Pipeline
 18,verified_classification_pipeline,pre-execution-checks.hdfs_paths_check,Task probe,0.106617,False,True,False,False,True,Code inspection
 19,verified_classification_pipeline,pre-execution-checks.task_args_check,Pipeline probe,0.118548,True,True,False,False,True,Parameters check
-20,verified_classification_pipeline,pre-execution-checks.lineage_check,Task probe,0.104944,True,True,False,False,True,Lineage
+20,verified_classification_pipeline,pre-execution-checks.network_traffic_check,Task probe,0.104944,True,True,False,False,True,Lineage
 21,verified_classification_pipeline,pre-execution-checks.python_code_check_spark,Task probe,2.330674,True,True,False,False,True,Code vulnerability check
 22,verified_classification_pipeline,pre-execution-checks.requirements_check,Task probe,0.336476,True,True,False,False,True,Dependency check
 23,verified_classification_pipeline,pre-execution-checks.read_permission_check,General purpose probe,3.21564,False,False,True,False,True,Testing

@@ -11,7 +11,7 @@ from pipeline_lib import (
     hadoop_config_check_security,
     hdfs_paths_check,
     task_args_check,
-    lineage_check,
+    network_traffic_check,
     spark_config_check,
     hdfs_file_can_read,
     hdfs_file_can_write,
@@ -94,7 +94,7 @@ with DAG(
         # p4
         lineage_check_t = CachingPythonOperator(
             task_id="lineage_check",
-            python_callable=lineage_check,
+            python_callable=network_traffic_check,
         )
 
         # p5

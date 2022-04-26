@@ -694,15 +694,29 @@ def spark_logs_check(
     return {"evidence": res["evidence"], "warnings": res["warnings"], "score": score}
 
 
-def lineage_check():
-    # from airflow.models import TaskInstance
-    # from airflow.operators.python import get_current_context
-
-    # ti: TaskInstance = get_current_context()["ti"]
+def network_traffic_check(target_task_id: str, application: str, expected_services: List[str] = []):
+    from airflow.operators.python import get_current_context
+    import re
 
     # TODO
+    # Reads network logs and checks for matching network services
 
-    return {"evidence": {}, "warnings": [], "score": 1.0}
+    with open(application) as f:
+        code = f.read()
+
+    evidence = {"code": code}
+
+    regex = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+
+    evidence["urls"] = re.findall(regex, evidence["code"])
+
+    warnings = [f"Unexpected url {url}"
+                for url in evidence["urls"]
+                if not any(map(lambda e_service: e_service in url, expected_services))]
+
+    score = 1.0 if len(warnings) == 0 else 0.1
+
+    return {"evidence": evidence, "warnings": warnings, "score": score}
 
 
 def hdfs_file_permission_check(

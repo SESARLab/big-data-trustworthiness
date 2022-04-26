@@ -21,7 +21,7 @@
   execution_date: '2022-04-20T07:13:20.188604+00:00'
   start_date: '2022-04-20T12:51:44.010525+00:00'
   state: success
-  task_id: pre-execution-checks.lineage_check
+  task_id: pre-execution-checks.network_traffick_check
 - dag_id: verified_kmeans_pipeline
   end_date: '2022-04-20T12:51:48.837819+00:00'
   execution_date: '2022-04-20T07:13:20.188604+00:00'
@@ -100,4 +100,3 @@
   start_date: '2022-04-20T13:05:55.640161+00:00'
   state: success
   task_id: assurance-report.report_generator
-

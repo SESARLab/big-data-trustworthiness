@@ -1,6 +1,7 @@
 # An Assurance Process for Big Data Trustworthiness
 
 Authors: Marco Anisetti, Claudio A. Ardagna, Filippo Berto
+
 Contacts: {firstname.lastname}@unimi.it
 
 ## Abstract
@@ -11,6 +12,3 @@ However, although Big Data has reached its functional maturity and represents a 
 While functionally appealing, Big Data does not provide a transparent environment with clear non-functional properties, impairing the users’ ability to evaluate its behavior and clashing with modern data-privacy regulations.
 In this paper, we present an enhanced assurance process for Big Data, which aims to increase transparency and trustworthiness of Big Data computations.
 The assurance process evaluates Big Data computations at all layers from the specific big data pipelines to the big data ecosystem underneath.
-
-## Keywords
-Assurance, Big Data, Trustworthiness

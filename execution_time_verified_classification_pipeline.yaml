@@ -21,7 +21,7 @@
   execution_date: '2022-04-19T16:15:15.274849+00:00'
   start_date: '2022-04-20T12:55:10.468020+00:00'
   state: success
-  task_id: pre-execution-checks.lineage_check
+  task_id: pre-execution-checks.network_traffick_check
 - dag_id: verified_classification_pipeline
   end_date: '2022-04-20T12:55:13.801562+00:00'
   execution_date: '2022-04-19T16:15:15.274849+00:00'
@@ -100,4 +100,3 @@
   start_date: '2022-04-20T13:05:51.971163+00:00'
   state: success
   task_id: assurance-report.report_generator
-

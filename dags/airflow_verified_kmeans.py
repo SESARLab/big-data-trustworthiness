@@ -11,7 +11,7 @@ from pipeline_lib import (
     hadoop_config_check_security,
     hdfs_paths_check,
     task_args_check,
-    lineage_check,
+    network_traffic_check,
     spark_config_check,
     hdfs_file_can_read,
     hdfs_file_can_write,
@@ -89,9 +89,14 @@ with DAG(
         )
 
         # p4
-        lineage_check_t = CachingPythonOperator(
-            task_id="lineage_check",
-            python_callable=lineage_check,
+        network_traffick_check_t = CachingPythonOperator(
+            task_id="network_traffic_check",
+            python_callable=network_traffic_check,
+            op_kwargs={
+                "target_task_id": train_model_t.task_id,
+                "application": "dags/spark_kmeans.py",
+                "expected_services": [],
+            },
         )
 
         # p5
@@ -197,16 +202,18 @@ with DAG(
             op_kwargs={
                 "target_app_name": "spark_kmeans",
                 "expected_jobs": {
-                    "collect at AreaUnderCurve",
-                    "collect at BinaryClassificationMetrics",
-                    "collect at StringIndexer",
-                    "count at BinaryClassificationMetrics",
-                    "parquet at LinearSVC",
-                    "parquet at StringIndexer",
-                    "runJob at SparkHadoopWriter",
-                    "showString at NativeMethodAccessorImpl.java:0",
-                    "treeAggregate at RDDLossFunction",
-                    "treeAggregate at Summarizer",
+                    'collectAsMap at ClusteringMetrics',
+                    'collectAsMap at KMeans',
+                    'collect at ClusteringMetrics',
+                    'collect at ClusteringSummary',
+                    'collect at KMeans',
+                    'countByValue at KMeans',
+                    'json at NativeMethodAccessorImpl.java:0',
+                    'parquet at KMeans',
+                    'runJob at SparkHadoopWriter',
+                    'showString at NativeMethodAccessorImpl.java:0',
+                    'sum at KMeans',
+                    'takeSample at KMeans',
                 },
                 "master": "yarn",
             },
